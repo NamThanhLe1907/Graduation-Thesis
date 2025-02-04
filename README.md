@@ -62,12 +62,14 @@ automated-palletizer-system
 | Result 1 | Result 2 |
 |----------|----------|
 | ![1](result_image/1.jpg) | ![2](result_image/2.jpg) |
+
 | Result 3 | Result 4 |
+|----------|----------|
 | ![3](result_image/3.jpg) | ![4](result_image/4.jpg) |
 
 | Simu 1 | Simu 2 |
 |----------|----------|
-| ![1](result_image/1.jpg) | ![2](result_image/2.jpg) |
+| ![1](result_image/simu1.jpg) | ![2](result_image/simu2.jpg) |
 
 2. **Robotic handling**
 *ONGOING*

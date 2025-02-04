@@ -59,6 +59,8 @@ automated-palletizer-system
 
 ## 📸 Demo (Updating)
 1. **Pallet detection, coordinate calculation and Module division**
+
+
 | Result 1 | Result 2 |
 |----------|----------|
 | ![1](result_image/1.jpg) | ![2](result_image/2.jpg) |

@@ -1,10 +1,16 @@
 from Camera_Handler import Logger
 from Pallet_Detection import (
+    find_pallet_in_list,
     apply_roi,
     detect_pallets,
     draw_division_points,
     divide_pallet_by_row,
     pixel_to_robot
+)
+from PLC_Controller import (
+    write_done_to_db, 
+    write_done_to_db,
+    write_data_38
 )
 
 
@@ -34,9 +40,9 @@ class PalletProcessor:
 
             x, y = coordinates[bao - 1]
 
-            if self.plc.write_coordinates(x, y):
+            if self.plc.write_data_38(x, y):
                 Logger.log(f"Ghi thành công tọa độ: X = {x:.3f}, Y = {y:.3f}")
-                self.plc.write_done_signal(0)
+                self.plc.write_done_to_db(0)
                 return processed_frame, edges, True
 
         return processed_frame, edges, False

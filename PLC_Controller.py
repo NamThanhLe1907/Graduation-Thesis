@@ -25,7 +25,7 @@ class PLCController:
             self.client.disconnect()
             print("PLC disconnected")
 
-    def read_hang_bao_from_db(self) -> Tuple[Optional[int], Optional[int], Optional[bool]]:
+    def read_data(self) -> Tuple[Optional[int], Optional[int], Optional[bool]]:
         """Đọc giá trị hàng, bao và tín hiệu done từ DB đọc"""
         try:
             # Đọc 5 bytes từ DB (giả sử cấu trúc: 2 bytes hàng, 2 bytes bao, 1 byte done)
@@ -40,7 +40,7 @@ class PLCController:
             print(f"Read error: {str(e)}")
             return None, None, None
 
-    def write_to_db38(self, x: float, y: float) -> bool:
+    def write_data_38(self, x: float, y: float) -> bool:
         """Ghi tọa độ X,Y vào DB ghi"""
         try:
             data = bytearray(8)  # 2 biến REAL (4 bytes mỗi cái)

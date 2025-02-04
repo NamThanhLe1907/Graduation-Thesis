@@ -30,10 +30,10 @@ class MainApp:
                     if bao > 3:
                         bao = 1
                         hang += 1
-                    self.plc.write_done_signal(0)
+                    self.plc.write_done_to_db(0)
                 else:
                     Logger.log("Chờ tín hiệu 'Done' từ PLC để tiếp tục...")
-                    if self.plc.wait_for_done():
+                    if self.plc.wait_for_done_signal():
                         bao += 1
                         if bao > 3:
                             bao = 1

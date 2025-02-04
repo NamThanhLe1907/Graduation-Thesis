@@ -26,17 +26,16 @@ The Automated Palletizer System with Image Processing is a computer vision-based
 ### Installation Steps
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/automated-palletizer.git
-   cd automated-palletizer
+   git clone https://github.com/NamThanhLe1907/Final-Project.git
    ```
 2. Install the required libraries:
    ```bash
    pip install -r requirements.txt
    ```
-3. Configure the PLC and camera settings in the `config.py` file.
+3. Configure the PLC and camera settings.
 4. Run the program:
    ```bash
-   python src/main.py
+   python main.py
    ```
 
 ## 🚀 How It Works
@@ -54,46 +53,21 @@ The Automated Palletizer System with Image Processing is a computer vision-based
 
 ## 🗂️ Project Structure
 ```
-automated-palletizer/
-├── src/
-│   ├── main.py               # Main program
-│   ├── plc_controller.py      # PLC communication
-│   ├── image_processing.py    # Image processing logic
-│   ├── config.py              # Configuration file
-│   └── utils/                 # Utility functions
-├── tests/                     # Unit tests
-├── requirements.txt           # List of dependencies
-└── README.md                  # Project documentation
+automated-palletizer-system
+*updating
 ```
 
-## 📸 Demo
+## 📸 Demo (Updating)
 1. **Pallet detection and coordinate calculation**
 2. **Module division and robotic handling**
 
-## 🤝 Contributing
-If you'd like to contribute to this project, please follow these steps:
-1. Fork the repository.
-2. Create a new branch:
-   ```bash
-   git checkout -b feature/YourFeatureName
-   ```
-3. Commit your changes:
-   ```bash
-   git commit -m 'Add some feature'
-   ```
-4. Push to the branch:
-   ```bash
-   git push origin feature/YourFeatureName
-   ```
-5. Open a Pull Request.
 
 ## 📜 License
-This project is licensed under the MIT License. See the LICENSE file for details.
+
 
 ## 📞 Contact
-- **Author:** [Your Name]  
-- **Email:** your-email@example.com  
-- **GitHub:** [your-username](https://github.com/your-username)  
-- **Website:** [your-website.com](https://your-website.com)
+- **Author:** [Nam Thanh Le]  
+- **Email:** namthanhle1907@example.com  
+- **GitHub:** [NamThanhLe1907](https://github.com/NamThanhLe1907)  
 
 Thank you for your interest in this project! 🎉

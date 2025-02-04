@@ -13,20 +13,21 @@ The Automated Palletizer System with Image Processing is a computer vision-based
 - **Programming Language:** Python
 - **Image Processing Libraries:** OpenCV, NumPy
 - **PLC Communication:** Snap7
-- **Hardware:** Industrial Camera, PLC (e.g., Siemens), Robotic Arm
-- **Development Tools:** Visual Studio Code, Git
+- **Hardware:** Camera, PLC (e.g., Siemens), 3 DOF Robotic Arm
+- **Development Tools:** Visual Studio Code, Git, Tia Portal
 
 ## 📦 Installation
 ### System Requirements
 - Python 3.8+
-- OpenCV (`pip install opencv-python`)
-- Snap7 (`pip install python-snap7`)
-- NumPy (`pip install numpy`)
+- OpenCV 
+- Snap7 
+- NumPy
+
 
 ### Installation Steps
 1. Clone the repository:
    ```bash
-   git clone https://github.com/NamThanhLe1907/Final-Project.git
+   git clone https://github.com/NamThanhLe1907/Graduation-Thesis.git
    ```
 2. Install the required libraries:
    ```bash

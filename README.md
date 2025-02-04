@@ -54,13 +54,19 @@ The Automated Palletizer System with Image Processing is a computer vision-based
 ## 🗂️ Project Structure
 ```
 automated-palletizer-system
-*updating
+*UPDATING*
 ```
 
 ## 📸 Demo (Updating)
-1. **Pallet detection and coordinate calculation**
-2. **Module division and robotic handling**
-
+1. **Pallet detection, coordinate calculation and Module division**
+![Pallet Detection Result](result_image/1.jpg)
+![Pallet Detection Result](result_image/2.jpg)
+![Pallet Detection Result](result_image/3.jpg)
+![Pallet Detection Result](result_image/4.jpg)
+![Matlab Simulation Tesing Result](result_image/simu1.jpg)
+![Matlab Simulation Tesing Result](result_image/simu2.jpg)
+2. **Robotic handling**
+*ONGOING*
 
 ## 📜 License
 

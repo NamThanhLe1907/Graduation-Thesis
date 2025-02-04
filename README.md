@@ -81,7 +81,7 @@ automated-palletizer-system
 
 ## 📞 Contact
 - **Author:** [Nam Thanh Le]  
-- **Email:** namthanhle1907@example.com  
+- **Email:** namthanhle1907@gmail.com
 - **GitHub:** [NamThanhLe1907](https://github.com/NamThanhLe1907)  
 
 Thank you for your interest in this project! 🎉

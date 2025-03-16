@@ -32,7 +32,7 @@ class Logger:
 
         
 class CameraHandler:
-    def __init__(self, width=1920, height=1080):
+    def __init__(self, width=1280, height=1024):
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)

@@ -1,26 +1,17 @@
-from Camera_Handler import Logger
-from Pallet_Detection import (
-    find_pallet_in_list,
-    apply_roi,
-    detect_pallets,
-    draw_division_points,
-    divide_pallet_by_row,
-    pixel_to_robot
-)
-from PLC_Controller import (
-    write_done_to_db, 
-    write_done_to_db,
-    write_data_38
-)
+from .Camera_Handler import Logger
+from Calibration import Calibration
+from Pallet_Detection import PalletDetection
+from PLC_Controller import PLCController
+from Module_Division import DivisionModule
+
 
 
 class PalletProcessor:
     def __init__(self, plc_controller):
-        self.plc = plc_controller
+        self.plc = PLCController
 
     def process_frame(self, frame, hang, bao):
-        roi_frame = apply_roi(frame)
-        pallets, processed_frame, edges = detect_pallets(roi_frame)
+        pallets, processed_frame, edges = PalletDetection.detect_pallets(frame)
 
         if not pallets:
             Logger.log("Không phát hiện pallet nào.")
@@ -28,11 +19,11 @@ class PalletProcessor:
 
         for pallet in pallets:
             try:
-                draw_division_points(processed_frame, pallet, hang, pixel_to_robot)
+                DivisionModule.draw_division_points(processed_frame, pallet, hang, Calibration.pixel_to_robot)
             except Exception as e:
                 Logger.log(f"Lỗi khi vẽ đường phân chia: {e}", debug=True)
 
-            coordinates, _ = divide_pallet_by_row(pallet, hang, pixel_to_robot)
+            coordinates, _ = PalletDetection.divide_pallet_by_row(pallet, hang, Calibration.pixel_to_robot)
 
             if bao < 1 or bao > len(coordinates):
                 Logger.log(f"Lỗi: Bao ({bao}) không hợp lệ.")

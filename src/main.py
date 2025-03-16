@@ -7,7 +7,7 @@ import cv2
 class MainApp:
     def __init__(self):
         self.camera = CameraHandler()
-        self.plc = PLCController("192.168.0.1", 0, 1, 63, 38)
+        #self.plc = PLCController("192.168.0.1", 0, 1, 63, 38)
         self.processor = PalletProcessor(self.plc)
 
     def run(self):

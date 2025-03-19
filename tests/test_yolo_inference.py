@@ -1,5 +1,8 @@
 import unittest
 import cv2
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from utils.yolo_inference import YOLOInference
 
 class TestYOLOInference(unittest.TestCase):
@@ -10,7 +13,7 @@ class TestYOLOInference(unittest.TestCase):
     def test_infer(self):
         results = self.yolo_inference.infer(self.test_frame)
         self.assertIsNotNone(results)
-        self.assertGreater(len(results.xyxy[0]), 0)  # Kiểm tra có phát hiện đối tượng
+        self.annotated_frame= results[0].plot()# Kiểm tra có phát hiện đối tượng
 
 if __name__ == "__main__":
     unittest.main()

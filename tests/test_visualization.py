@@ -1,11 +1,14 @@
 import unittest
 import cv2
 import numpy as np
-from utils.visualization import Visualizer
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from utils.visualization import AppGUI
 
 class TestVisualizer(unittest.TestCase):
     def setUp(self):
-        self.visualizer = Visualizer()
+        self.visualizer = AppGUI()
         self.test_frame = np.zeros((720, 1280, 3), dtype=np.uint8)  # Khung hình đen
         self.boxes = [[100, 100, 200, 200]]  # Example bounding box
         self.confidences = [0.95]  # Example confidence

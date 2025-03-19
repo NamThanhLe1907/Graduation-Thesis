@@ -9,9 +9,21 @@ class CameraInterface:
 
     def initialize(self):
         self.capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+        if not self.capture.isOpened():
+            # Thử index camera khác nếu mặc định không hoạt động
+            self.capture = cv2.VideoCapture(1, cv2.CAP_DSHOW)  # Thử index 1
+            if not self.capture.isOpened():
+                raise RuntimeError(f"Không thể mở camera tại index {self.camera_index} hoặc 1")
+                
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         self.capture.set(cv2.CAP_PROP_FPS, self.fps)
+        
+        # Kiểm tra thông số camera thực tế
+        actual_width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
+        print(f"Camera initialized: {actual_width}x{actual_height} @ {actual_fps:.1f}FPS")
 
     def get_frame(self):
         ret, frame = self.capture.read()

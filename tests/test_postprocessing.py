@@ -1,5 +1,8 @@
 import unittest
 import numpy as np
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from utils.postprocessing import PostProcessor
 
 class TestPostProcessor(unittest.TestCase):

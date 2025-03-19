@@ -1,33 +1,64 @@
+import tkinter as tk
+from PIL import Image, ImageTk
 import cv2
+import time
 
-class Visualizer:
-    def __init__(self):
-        pass
-
-    def draw_boxes(self, frame, boxes, confidences, class_ids, class_names, show_metadata=True):
-        """Draw bounding boxes and metadata on the frame."""
-        for box, confidence, class_id in zip(boxes, confidences, class_ids):
-            x1, y1, x2, y2 = box
-            color = (0, 255, 0)  # Green color for bounding box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            if show_metadata:
-                label = f"{class_names[class_id]}: {confidence:.2f}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        return frame
-
-    def show_frame(self, frame):
-        """Display the frame in a window."""
-        cv2.imshow("Detection", frame)
-        cv2.waitKey(1)  # Display for 1 ms
+class AppGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Camera Processor")
+        self.root.geometry("1300x800")
+        
+        # Khung hiển thị hình annotated với chiều cao cố định
+        self.image_frame = tk.Frame(root, height=600)
+        self.image_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False)
+        self.image_frame.pack_propagate(False)
+        
+        self.annotated_label = tk.Label(self.image_frame)
+        self.annotated_label.pack(side=tk.TOP, padx=5, pady=5, expand=True)
+        
+        # Khung thông tin: FPS và log message
+        self.info_frame = tk.Frame(root)
+        self.info_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.fps_label = tk.Label(self.info_frame, text="FPS: 0.0", font=("Helvetica", 12))
+        self.fps_label.pack(pady=5)
+        
+        self.console = tk.Text(self.info_frame, height=10, width=100)
+        self.console.pack(pady=5)
+        
+    def update(self, annotated):
+        """
+        Cập nhật giao diện với annotated frame.
+        """
+        try:
+            # Chuyển từ BGR sang RGB để hiển thị đúng màu sắc
+            annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            self.log_message(f"Error converting annotated frame: {e}", "ERROR")
+            return
+        
+        annotated_img = Image.fromarray(annotated_rgb)
+        annotated_imgtk = ImageTk.PhotoImage(image=annotated_img)
+        
+        self.annotated_label.config(image=annotated_imgtk)
+        self.annotated_label.image = annotated_imgtk  # Giữ tham chiếu để tránh bị thu gom rác
+        self.annotated_label.update_idletasks()
+        self.annotated_label.update()
+        
+    def log_message(self, message, level="INFO"):
+        timestamp = time.strftime("%H:%M:%S")
+        entry = f"[{timestamp}] {level}: {message}\n"
+        self.root.after(0, lambda: (self.console.insert(tk.END, entry), self.console.see(tk.END)))
+        
+    def run(self):
+        self.root.mainloop()
 
 if __name__ == "__main__":
-    visualizer = Visualizer()
-    # Example usage
-    frame = cv2.imread('sample_image.jpg')  # Replace with actual frame capture
-    boxes = [[100, 100, 200, 200]]  # Example bounding box
-    confidences = [0.95]  # Example confidence
-    class_ids = [0]  # Example class ID
-    class_names = ["pallet", "load"]  # Example class names
-    frame_with_boxes = visualizer.draw_boxes(frame, boxes, confidences, class_ids, class_names)
-    visualizer.show_frame(frame_with_boxes)
-    cv2.destroyAllWindows()
+    root = tk.Tk()
+    gui = AppGUI(root)
+    # Demo: load hình mẫu từ file nếu có
+    frame = cv2.imread("sample_image.jpg")
+    if frame is not None:
+        gui.update(frame)
+    gui.run()

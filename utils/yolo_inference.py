@@ -2,10 +2,11 @@ from ultralytics import YOLO
 import cv2
 
 class YOLOInference:
-    def __init__(self, model_path="best.pt"):
+    def __init__(self, model_path="best.pt", conf=0.5, iou=0.5):
         self.model = YOLO(model_path, task='obb')  # Explicitly specify OBB task
-        # Set default confidence threshold for detection
-        self.model.conf = 0.25  # Lower confidence threshold for better detection
+        # Set detection thresholds
+        self.model.conf = conf  # Confidence threshold
+        self.model.iou = iou    # NMS IoU threshold
 
     def infer(self, frame):
         """Run inference on a given frame."""

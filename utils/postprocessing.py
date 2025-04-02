@@ -54,7 +54,7 @@ class PostProcessor:
             
             if keep:
                 valid_indices.append(i)
-                print(f"Box {i} kept: NormArea {normalized_area:.4f}, Ratio {wh_ratio:.2f}, Theta {np.rad2deg(theta):.1f}°")
+                # print(f"Box {i} kept: NormArea {normalized_area:.4f}, Ratio {wh_ratio:.2f}, Theta {np.rad2deg(theta):.1f}°")
         
         return boxes[valid_indices], valid_indices
 

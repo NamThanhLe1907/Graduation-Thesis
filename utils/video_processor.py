@@ -1,15 +1,10 @@
 import cv2
-import tkinter as tk
 import numpy as np
-from threading import Thread
 from utils.camera_interface import CameraInterface
 from utils.frame_processor import FrameProcessor
 from utils.yolo_inference import YOLOInference
 from utils.postprocessing import PostProcessor
-from utils.visualization import AppGUI
 from utils.performance_monitor import PerformanceMonitor
-
-import math
 import time
 
 class VideoProcessor:
@@ -114,7 +109,6 @@ class VideoProcessor:
                             angle_deg = float(np.rad2deg(obb.xywhr[idx, 4])) if idx < len(obb.xywhr) else None
                             
                             label_text = f"{label} {conf:.2f}" + (f", {angle_deg:.1f}°" if angle_deg else "")
-                            print(f"Label: {label_text}")
                             # Vẽ polygon xoay
                             pts = poly.reshape(4, 2).astype(int)
                             cv2.polylines(annotated_frame, [pts], isClosed=True, color=color, thickness=2)
@@ -127,20 +121,20 @@ class VideoProcessor:
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)
 
                         # Vẽ chỉ báo va chạm
-                        # for (i, j) in collisions:
-                        #     box1 = smoothed_boxes[i]
-                        #     box2 = smoothed_boxes[j]
-                        #     # Get center from xywhr format (normalized coordinates)
-                        #     x_center1 = int(box1[0] * img_w)
-                        #     y_center1 = int(box1[1] * img_h)
-                        #     center1 = (x_center1, y_center1)
+                        for (i, j) in collisions:
+                            box1 = smoothed_boxes[i]
+                            box2 = smoothed_boxes[j]
+                            # Get center from xywhr format (normalized coordinates)
+                            x_center1 = int(box1[0] )
+                            y_center1 = int(box1[1] )
+                            center1 = (x_center1, y_center1)
                             
-                        #     x_center2 = int(box2[0] * img_w)
-                        #     y_center2 = int(box2[1] * img_h)
-                        #     center2 = (x_center2, y_center2)
-                        #     cv2.circle(annotated_frame, center1, 5, (0, 0, 255), -1)
-                        #     cv2.circle(annotated_frame, center2, 5, (0, 0, 255), -1)
-                        #     cv2.line(annotated_frame, center1, center2, (0, 0, 255), 2)
+                            x_center2 = int(box2[0] )
+                            y_center2 = int(box2[1] )
+                            center2 = (x_center2, y_center2)
+                            cv2.circle(annotated_frame, center1, 5, (0, 0, 255), -1)
+                            cv2.circle(annotated_frame, center2, 5, (0, 0, 255), -1)
+                            cv2.line(annotated_frame, center1, center2, (0, 0, 255), 2)
                             
                         diff = cv2.norm(annotated_frame, processed_frame)
                         self.gui.log_message(f"Annotation applied with postprocessing, diff={diff}, shape={annotated_frame.shape}", "DEBUG")
@@ -158,6 +152,9 @@ class VideoProcessor:
                 self.gui.root.after(0, lambda: self.gui.update(display_frame))
 
                 self.performance_monitor.end_frame()
+                fps = self.performance_monitor.get_fps()
+                avg_inference = self.performance_monitor.get_average_inference_time()
+                self.gui.update_fps_info(fps, avg_inference)
                 time.sleep(0.01)
 
             except Exception as e:

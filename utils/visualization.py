@@ -51,6 +51,10 @@ class AppGUI:
         entry = f"[{timestamp}] {level}: {message}\n"
         self.root.after(0, lambda: (self.console.insert(tk.END, entry), self.console.see(tk.END)))
         
+    def update_fps_info(self, fps, avg_inference):
+        info_text = f"FPS: {fps:.2f} | Avg Inference: {avg_inference:.3f} s"
+        self.fps_label.config(text=info_text)
+
     def run(self):
         self.root.mainloop()
 

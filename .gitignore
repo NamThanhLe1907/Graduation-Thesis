@@ -6,7 +6,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+libs/
 
 # mypy
 .mypy_cache/
@@ -19,13 +19,123 @@ __pycache__/
 *$py.class
 
 .txt
-
+*.jpg
+*.png
+*.md
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+<<<<<<< HEAD
 *.roomodes
 *.jpg
 *.png
 /docs
 /.vscode
 *.pt
+=======
+cpp/
+libs/
+.vscode/
+*.exe
+
+
+*.pt
+*.json
+*.onnx
+# Compiled object files, static and dynamic libs
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Executable files
+*.exe
+*.out
+*.app
+
+# Debug and crash logs
+*.log
+*.stackdump
+
+# Temporary files and editor backups
+*.swp
+*.swo
+*.bak
+*.tmp
+*.~*
+
+# Dependency files
+*.d
+*.dep
+
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Build directories (common names)
+build/
+bin/
+lib/
+dist/
+
+# CodeBlocks
+*.layout
+*.cbp
+*.depend
+
+# CLion and JetBrains IDEs
+.idea/
+cmake-build-debug/
+cmake-build-release/
+
+# VSCode
+.vscode/
+
+# Xcode
+*.xcworkspace
+*.xcuserstate
+*.xcuserdata/
+*.xcodeproj/
+
+# Visual Studio
+*.vcxproj*
+*.sln
+*.pdb
+*.ipch
+*.obj
+*.idb
+*.tlog
+*.lastbuildstate
+.vscode/
+.vs/
+Debug/
+Release/
+x64/
+x86/
+ARM/
+
+# Other package managers
+.vcpkg/
+conanbuildinfo.txt
+conanbuildinfo.cmake
+conaninfo.txt
+conan.lock
+
+# Generated documentation
+docs/html/
+docs/latex/
+
+# Autotools
+autom4te.cache/
+configure
+config.log
+config.status
+config.h
+config.h.in
+.roomodes
+>>>>>>> yolov8-branch

@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import cv2
 
 class YOLOInference:
-    def __init__(self, model_path="best.pt", conf=0.5, iou=0.5):
+    def __init__(self, model_path="best.pt", conf=None, iou=0.5):
         self.model = YOLO(model_path, task='obb')  # Explicitly specify OBB task
         # Set detection thresholds
         self.model.conf = conf  # Confidence threshold
@@ -15,8 +15,8 @@ class YOLOInference:
         return results
 
 if __name__ == "__main__":
-    inference = YOLOInference(model_path="best.pt")
-    frame = cv2.imread("sample_image.jpg")  # Replace with actual frame capture
+    inference = YOLOInference(model_path="best.pt",conf=0.1)
+    frame = cv2.imread("./utils/sample_image.jpg")  # Replace with actual frame capture
     if frame is None:
         print("Error: Could not read 'sample_image.jpg'.")
     else:

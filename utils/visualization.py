@@ -10,9 +10,8 @@ class AppGUI:
         self.root.geometry("1300x800")
         
         # Khung hiển thị hình annotated với chiều cao cố định
-        self.image_frame = tk.Frame(root, height=600)
-        self.image_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False)
-        self.image_frame.pack_propagate(False)
+        self.image_frame = tk.Frame(root)
+        self.image_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
         self.annotated_label = tk.Label(self.image_frame)
         self.annotated_label.pack(side=tk.TOP, padx=5, pady=5, expand=True)
@@ -26,6 +25,8 @@ class AppGUI:
         
         self.console = tk.Text(self.info_frame, height=10, width=100)
         self.console.pack(pady=5)
+        self.exit_btn = tk.Button(self.info_frame, text="Exit", command=self.root.destroy, bg="#ff4444", fg="white")
+        self.exit_btn.pack(side=tk.RIGHT, padx=10, pady=5)
         
     def update(self, annotated):
         """

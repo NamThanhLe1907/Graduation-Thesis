@@ -1,27 +1,29 @@
 import numpy as np
 
 class PostProcessor:
-    def __init__(self, alpha=0.2):
+    def __init__(self, alpha=0.2, conf_threshold=0.85):
         self.alpha = alpha
+        self.conf_threshold = conf_threshold
         self.previous_boxes = None
-        # Adaptive geometry constraints
-        self.min_area = 0.0001    # 0.01% of image area
-        self.max_area = 0.95      # 95% of image area
-        self.wh_ratio_range = (0.2, 5.0)  # Extreme width/height ratios
+        # Geometry constraints optimized for pallet detection
+        self.min_area = 0.02    # 0.2% of image area
+        self.max_area = 0.8      # 80% of image area
+        self.wh_ratio_range = (0.5, 2.5)  # Suitable W/H ratio for pallet detection
 
-    def filter_by_geometry(self, boxes, img_size):
+    def filter_by_geometry(self, boxes, frame_resolution):
         """
         Lọc boxes dựa trên các đặc trưng hình học.
         
         Args:
             boxes (np.ndarray): Mảng boxes với shape (N, 5) ở định dạng [xc, yc, w, h, theta]
-            img_size (tuple): (width, height) của ảnh.
+            frame_resolution (tuple): (width, height) của khung hình (pixel).
         
         Returns:
             tuple: (np.ndarray: Các boxes hợp lệ sau khi lọc., list: valid_indices)
         """
         valid_indices = []
-        img_area = img_size[0] * img_size[1]
+        img_area = frame_resolution[0] * frame_resolution[1]
+        print("DEBUG: Image area:", img_area)
         for i, box in enumerate(boxes):
             xc, yc, w, h, theta = box
             # Tính kích thước thực sau khi xoay
@@ -31,30 +33,31 @@ class PostProcessor:
             effective_h = w * sin_t + h * cos_t
 
             normalized_area = (effective_w * effective_h) / img_area
+            print(f"DEBUG: Box {i} - NormArea: {normalized_area:.4f}, W: {effective_w:.2f}, H: {effective_h:.2f}, Theta: {np.rad2deg(theta):.1f}°")
             wh_ratio = effective_w / effective_h if effective_h > 0 else 0
 
             # Thiết lập ngưỡng động dựa trên góc xoay
             rotation_factor = np.abs(theta) / np.pi  # từ 0 đến 1
             dynamic_ratio_min = max(0.1, self.wh_ratio_range[0] * (1 - rotation_factor))
             dynamic_ratio_max = min(10.0, self.wh_ratio_range[1] * (1 + rotation_factor))
+            print(f"DEBUG: Box {i} - Dynamic Ratio Min: {dynamic_ratio_min:.2f}, Max: {dynamic_ratio_max:.2f}")
+            # keep = True
+            # if normalized_area < self.min_area:
+            #     print(f"Box {i} rejected: NormArea {normalized_area:.4f} < min {self.min_area}")
+            #     keep = False
+            # elif normalized_area > self.max_area:
+            #     print(f"Box {i} rejected: NormArea {normalized_area:.4f} > max {self.max_area}")
+            #     keep = False
+            # elif wh_ratio < dynamic_ratio_min:
+            #     print(f"Box {i} rejected: Ratio {wh_ratio:.2f} < min {dynamic_ratio_min:.2f}")
+            #     keep = False
+            # elif wh_ratio > dynamic_ratio_max:
+            #     print(f"Box {i} rejected: Ratio {wh_ratio:.2f} > max {dynamic_ratio_max:.2f}")
+            #     keep = False
             
-            keep = True
-            if normalized_area < self.min_area:
-                print(f"Box {i} rejected: NormArea {normalized_area:.4f} < min {self.min_area}")
-                keep = False
-            elif normalized_area > self.max_area:
-                print(f"Box {i} rejected: NormArea {normalized_area:.4f} > max {self.max_area}")
-                keep = False
-            elif wh_ratio < dynamic_ratio_min:
-                print(f"Box {i} rejected: Ratio {wh_ratio:.2f} < min {dynamic_ratio_min:.2f}")
-                keep = False
-            elif wh_ratio > dynamic_ratio_max:
-                print(f"Box {i} rejected: Ratio {wh_ratio:.2f} > max {dynamic_ratio_max:.2f}")
-                keep = False
-            
-            if keep:
-                valid_indices.append(i)
-                # print(f"Box {i} kept: NormArea {normalized_area:.4f}, Ratio {wh_ratio:.2f}, Theta {np.rad2deg(theta):.1f}°")
+            # if keep:
+            valid_indices.append(i)
+            print(f"Box {i} kept: NormArea {normalized_area:.4f}, Ratio {wh_ratio:.2f}, Theta {np.rad2deg(theta):.1f}°")
         
         return boxes[valid_indices], valid_indices
 
@@ -80,13 +83,14 @@ class PostProcessor:
         self.previous_boxes = smoothed.copy()
         return smoothed
 
-    def detect_collisions(self, obb, img_size, valid_indices=None):
+    def detect_collisions(self, obb, frame_resolution, confs, valid_indices=None):
         """
         Phát hiện va chạm giữa các box dựa trên thông tin OBB đã có.
         
         Args:
             obb: Đối tượng OBB từ results[0].obb, phải có thuộc tính xyxyxyxy với shape (N,8)
-            img_size (tuple): (width, height) của ảnh.
+            frame_resolution (tuple): (width, height) của khung hình (pixel).
+            confs (np.ndarray): Mảng confidence scores tương ứng với các boxes.
         
         Returns:
             list: Danh sách các cặp index các box có va chạm.
@@ -100,14 +104,14 @@ class PostProcessor:
             # Chuyển flat array (8 giá trị) thành 4 điểm (4x2)
             polygons.append(np.array(poly).reshape(4, 2))
         
-        # So sánh từng cặp đa giác sử dụng thuật toán SAT
-        # Chỉ kiểm tra các box hợp lệ
+        # Nếu có valid_indices, chỉ lấy các box hợp lệ
         if valid_indices is not None:
             polygons = [polygons[i] for i in valid_indices]
+            confs = confs[valid_indices]
             
         for i in range(len(polygons)):
             for j in range(i + 1, len(polygons)):
-                if self._sat_intersect(polygons[i], polygons[j]):
+                if self._sat_intersect(polygons[i], polygons[j]) and confs[i] >= self.conf_threshold and confs[j] >= self.conf_threshold:
                     collisions.append((i, j))
         return collisions
 
@@ -149,7 +153,7 @@ class PostProcessor:
 
 if __name__ == "__main__":
     from results import OBB  # Import OBB từ YOLO
-    processor = PostProcessor(alpha=0.4)
+    processor = PostProcessor(alpha=0.4, conf_threshold=0.65)
     
     # Tạo test data cho 3 boxes ở định dạng [xc, yc, w, h, theta]
     import numpy as np
@@ -162,11 +166,12 @@ if __name__ == "__main__":
     
     # Test filter_by_geometry
     boxes = test_obb.xywhr.cpu().numpy() if hasattr(test_obb.xywhr, "cpu") else test_obb.xywhr
-    filtered, valid_indices = processor.filter_by_geometry(boxes, img_size=(640, 480))
+    filtered, valid_indices = processor.filter_by_geometry(boxes, frame_resolution=(640, 480))
     print(f"Kept {len(filtered)}/{len(boxes)} boxes after geometry filtering")
     
     # Test collision detection
-    collisions = processor.detect_collisions(test_obb, img_size=(640, 480), valid_indices=valid_indices)
+    confs = test_obb.conf.cpu().numpy() if hasattr(test_obb.conf, "cpu") else test_obb.conf
+    collisions = processor.detect_collisions(test_obb, frame_resolution=(640, 480), confs=confs, valid_indices=valid_indices)
     print(f"Collisions detected: {collisions}")
     
     # Test chuyển đổi sang XYXY

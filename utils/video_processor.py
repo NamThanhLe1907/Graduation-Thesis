@@ -5,6 +5,7 @@ from utils.frame_processor import FrameProcessor
 from utils.yolo_inference import YOLOInference
 from utils.postprocessing import PostProcessor
 from utils.performance_monitor import PerformanceMonitor
+from utils.Module_division import DivisionModule
 import time
 
 class VideoProcessor:
@@ -12,7 +13,8 @@ class VideoProcessor:
         self.gui = gui
         self.camera = CameraInterface()
         self.processor = FrameProcessor()
-        self.yolo_inference = YOLOInference(model_path="best.pt")  # Hãy chắc chắn model path đúng
+        self.yolo_inference = YOLOInference(model_path="best.pt",conf=0.9)
+        self.division_module = DivisionModule(pallet_config={'LR': 12, 'LQ': 10})
         self.post_processor = PostProcessor(alpha=0.2)
         self.performance_monitor = PerformanceMonitor()
         self.running = False
@@ -48,6 +50,9 @@ class VideoProcessor:
                 results = self.yolo_inference.infer(processed_frame)
                 print(f"YOLO results: {len(results)} detections")
                 
+                # Áp dụng chia vùng module 1
+                division_result = self.division_module.module1_division()
+                
                 # Log confidence và tỷ lệ W/H
                 if results and len(results) > 0:
                     if results[0].obb:
@@ -55,34 +60,31 @@ class VideoProcessor:
                         # Lấy thông tin confidence
                         confs = obb.conf.cpu().numpy() if hasattr(obb.conf, "cpu") else obb.conf
                         print(f"Confidence stats - Min: {confs.min():.2f}, Max: {confs.max():.2f}, Mean: {confs.mean():.2f}")
-                        
-                        # Lấy thông tin kích thước box từ OBB
-                        boxes = obb.xywhr.cpu().numpy() if hasattr(obb.xywhr, "cpu") else obb.xywhr
-                        
-                        # Tùy chọn smoothing (mặc định tắt)
-                        use_smoothing = False
-                        if use_smoothing:
-                            smoothed_boxes = self.post_processor.smooth_boxes(boxes)
-                        else:
-                            smoothed_boxes = boxes
-                        
+                        valid_conf_indices = np.where(confs > 0.9)[0]
+                        if valid_conf_indices.size == 0:
+                            continue
+                        confs = confs[valid_conf_indices]
+                        boxes_all = obb.xywhr.cpu().numpy() if hasattr(obb.xywhr, "cpu") else obb.xywhr
+                        boxes = boxes_all[valid_conf_indices]
                         # Áp dụng bộ lọc hình học
-                        original_count = len(smoothed_boxes)
+                        original_count = len(boxes)
                         filtered_result = self.post_processor.filter_by_geometry(
-                            smoothed_boxes,
-                            img_size=img_size
+                            boxes,
+                            frame_resolution=img_size
                         )
                         if isinstance(filtered_result, tuple):
-                            smoothed_boxes, valid_indices = filtered_result
+                            boxes, valid_indices = filtered_result
+                            confs = confs[valid_indices]
                         else:
-                            smoothed_boxes = filtered_result
+                            boxes = filtered_result
                             valid_indices = None
-                        print(f"Geometry filter: Kept {len(smoothed_boxes)}/{original_count} boxes")
-                        
+                        print(f"Geometry filter: Kept {len(boxes)}/{original_count} boxes")
+                            
                         # Phát hiện va chạm giữa các box
                         collisions = self.post_processor.detect_collisions(
-                            obb,  # Truyền trực tiếp OBB object
-                            img_size=img_size,
+                            obb,
+                            frame_resolution=img_size,
+                            confs=confs,
                             valid_indices=valid_indices
                         )
                         
@@ -108,22 +110,23 @@ class VideoProcessor:
                             label = names.get(cls_id, f"ID:{cls_id}")
                             angle_deg = float(np.rad2deg(obb.xywhr[idx, 4])) if idx < len(obb.xywhr) else None
                             
-                            label_text = f"{label} {conf:.2f}" + (f", {angle_deg:.1f}°" if angle_deg else "")
+                            label_text = f"{label} {conf:.2f}" + (f", {angle_deg:.2f}deg" if angle_deg else "")
                             # Vẽ polygon xoay
                             pts = poly.reshape(4, 2).astype(int)
-                            cv2.polylines(annotated_frame, [pts], isClosed=True, color=color, thickness=2)
-                            
+
+                            cv2.polylines(annotated_frame, [pts], isClosed=True, color=color, thickness=4)
+                        
                             # Tính toán vị trí text dựa trên góc dưới bên trái box
                             xmin = pts[:,0].min()
                             ymax = pts[:,1].max()
                             text_pos = (int(xmin), int(ymax))
                             cv2.putText(annotated_frame, label_text, text_pos,
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)
-
+                            
                         # Vẽ chỉ báo va chạm
                         for (i, j) in collisions:
-                            box1 = smoothed_boxes[i]
-                            box2 = smoothed_boxes[j]
+                            box1 = boxes[i]
+                            box2 = boxes[j]
                             # Get center from xywhr format (normalized coordinates)
                             x_center1 = int(box1[0] )
                             y_center1 = int(box1[1] )

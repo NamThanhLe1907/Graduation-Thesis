@@ -1,11 +1,11 @@
 import cv2
 import numpy as np
-from utils.camera_interface import CameraInterface
-from utils.frame_processor import FrameProcessor
-from utils.yolo_inference import YOLOInference
-from utils.postprocessing import PostProcessor
-from utils.performance_monitor import PerformanceMonitor
-from utils.Module_division import DivisionModule
+from src.camera_interface import CameraInterface
+from src.frame_processor import FrameProcessor
+from src.yolo_inference import YOLOInference
+from src.postprocessing import PostProcessor
+from src.performance_monitor import PerformanceMonitor
+from src.Module_division import DivisionModule
 import time
 
 class VideoProcessor:

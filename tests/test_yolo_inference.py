@@ -3,7 +3,7 @@ import cv2
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from utils.yolo_inference import YOLOInference
+from src.yolo_inference import YOLOInference
 
 
 class TestYOLOInference(unittest.TestCase):

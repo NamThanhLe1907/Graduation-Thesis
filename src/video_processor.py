@@ -50,13 +50,14 @@ class VideoProcessor:
                 results = self.yolo_inference.infer(processed_frame)
                 print(f"YOLO results: {len(results)} detections")
                 
-                # Áp dụng chia vùng module 1
-                division_result = self.division_module.module1_division()
                 
                 # Log confidence và tỷ lệ W/H
                 if results and len(results) > 0:
                     if results[0].obb:
                         obb = results[0].obb
+                        # detected_box = [tuple(pt) for pt in (obb.xyxyxyxy[0].reshape(4,2))]
+                        # division_result = self.division_module.module1_division(detected_box=detected_box)
+                        # print("Division result:", division_result)
                         # Lấy thông tin confidence
                         confs = obb.conf.cpu().numpy() if hasattr(obb.conf, "cpu") else obb.conf
                         print(f"Confidence stats - Min: {confs.min():.2f}, Max: {confs.max():.2f}, Mean: {confs.mean():.2f}")
@@ -115,13 +116,37 @@ class VideoProcessor:
                             pts = poly.reshape(4, 2).astype(int)
 
                             cv2.polylines(annotated_frame, [pts], isClosed=True, color=color, thickness=4)
-                        
+                            # division_result = self.division_module.module1_division(detected_box=rotated_boxes[idx])
+                            # print("Division result:", division_result)
                             # Tính toán vị trí text dựa trên góc dưới bên trái box
                             xmin = pts[:,0].min()
                             ymax = pts[:,1].max()
                             text_pos = (int(xmin), int(ymax))
                             cv2.putText(annotated_frame, label_text, text_pos,
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)
+                            # CHỈ VẼ MODULE CHO CLASS PALLET sau dòng này (dòng 118)
+                            if label in ["-pallet-"]:
+                                division_result = self.division_module.module1_division(detected_box=poly.reshape(4,2))
+                                ab_points = division_result['AB_points']
+                                dc_points = division_result['DC_points']
+                                for i in range(len(ab_points)):
+                                    pt1 = (int(ab_points[i][0].item()) if hasattr(ab_points[i][0], "item") else int(ab_points[i][0]),
+                                           int(ab_points[i][1].item()) if hasattr(ab_points[i][1], "item") else int(ab_points[i][1]))
+                                    pt2 = (int(dc_points[i][0].item()) if hasattr(dc_points[i][0], "item") else int(dc_points[i][0]),
+                                           int(dc_points[i][1].item()) if hasattr(dc_points[i][1], "item") else int(dc_points[i][1]))
+                                    cv2.line(annotated_frame, pt1, pt2, (0,255,0), 2)
+                                for i in range(len(ab_points)-1):
+                                    pt1 = (int(ab_points[i][0].item()) if hasattr(ab_points[i][0], "item") else int(ab_points[i][0]),
+                                           int(ab_points[i][1].item()) if hasattr(ab_points[i][1], "item") else int(ab_points[i][1]))
+                                    pt2 = (int(ab_points[i+1][0].item()) if hasattr(ab_points[i+1][0], "item") else int(ab_points[i+1][0]),
+                                           int(ab_points[i+1][1].item()) if hasattr(ab_points[i+1][1], "item") else int(ab_points[i+1][1]))
+                                    cv2.line(annotated_frame, pt1, pt2, (0,255,0), 2)
+                                for i in range(len(dc_points)-1):
+                                    pt1 = (int(dc_points[i][0].item()) if hasattr(dc_points[i][0], "item") else int(dc_points[i][0]),
+                                           int(dc_points[i][1].item()) if hasattr(dc_points[i][1], "item") else int(dc_points[i][1]))
+                                    pt2 = (int(dc_points[i+1][0].item()) if hasattr(dc_points[i+1][0], "item") else int(dc_points[i+1][0]),
+                                           int(dc_points[i+1][1].item()) if hasattr(dc_points[i+1][1], "item") else int(dc_points[i+1][1]))
+                                    cv2.line(annotated_frame, pt1, pt2, (0,255,0), 2)
                             
                         # Vẽ chỉ báo va chạm
                         for (i, j) in collisions:

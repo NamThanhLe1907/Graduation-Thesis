@@ -130,3 +130,4 @@ config.status
 config.h
 config.h.in
 .roomodes
+/docs

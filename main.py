@@ -1,7 +1,7 @@
 import tkinter as tk
 from threading import Thread
-from src.visualization import AppGUI
-from src.video_processor import VideoProcessor
+from utility.visualization import AppGUI
+from utility.video_processor import VideoProcessor
 
 
 def main():

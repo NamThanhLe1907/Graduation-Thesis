@@ -2,7 +2,7 @@ import unittest
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from src.camera_interface import CameraInterface
+from utility.camera_interface import CameraInterface
 
 class TestCameraInterface(unittest.TestCase):
     def setUp(self):

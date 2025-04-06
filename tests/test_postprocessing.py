@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Thêm thư mục gốc của dự án vào sys.path để import module
 sys.path.append(str(Path(__file__).parent.parent))
-from src.postprocessing import PostProcessor
+from utility.postprocessing import PostProcessor
 
 def draw_boxes(image, boxes, color, thickness=2):
     """

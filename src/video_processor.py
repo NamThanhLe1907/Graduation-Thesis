@@ -13,7 +13,7 @@ class VideoProcessor:
         self.gui = gui
         self.camera = CameraInterface()
         self.processor = FrameProcessor()
-        self.yolo_inference = YOLOInference(model_path="best.pt",conf=0.9)
+        self.yolo_inference = YOLOInference(model_path="final.pt",conf=0.9)
         self.division_module = DivisionModule(pallet_config={'LR': 12, 'LQ': 10})
         self.post_processor = PostProcessor(alpha=0.2)
         self.performance_monitor = PerformanceMonitor()

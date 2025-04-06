@@ -11,7 +11,7 @@ class YOLOInference:
     def infer(self, frame):
         """Run inference on a given frame."""
         # For OBB models we need to specify the task and use imgsz from the model
-        results = self.model(frame, task='obb', imgsz=self.model.args['imgsz'], device=self.device)
+        results = self.model(frame, task='obb', imgsz=self.model.args['imgsz'], device='cpu')
         return results
 
 if __name__ == "__main__":

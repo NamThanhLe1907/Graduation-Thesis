@@ -42,30 +42,6 @@ class VideoProcessor:
         self.last_calibrated_depth = None
         self.frame_count = 0
 
-    def _update_depth_estimation(self, frames):
-        try:
-            # Xử lý batch frames
-            batch_tensor = torch.stack([
-                torch.from_numpy(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).float().permute(2, 0, 1)
-                for frame in frames
-            ]).to(self.depth_estimator.device) / 255.0
-            
-            with torch.inference_mode(), torch.cuda.amp.autocast():
-                depths = self.depth_estimator.model.infer(batch_tensor)
-                torch.cuda.empty_cache()
-            
-            # Lấy frame cuối cùng để hiển thị
-            calibrated_depth = depths[-1].cpu().numpy().astype(np.float32)
-            depth_heatmap, _ = self.depth_estimator.get_heatmap(calibrated_depth)
-            self.last_depth_heatmap = depth_heatmap
-            self.last_calibrated_depth = calibrated_depth
-            
-            # Lưu debug image mỗi 10 frame
-            if self.frame_count % 10 == 0:
-                cv2.imwrite("debug_output.jpg", cv2.cvtColor(frames[-1], cv2.COLOR_RGB2BGR))
-        except Exception as e:
-            print(f"Depth estimation error: {e}")
-
     def start_processing(self):
         self.running = True
         self.camera.initialize()
@@ -186,11 +162,27 @@ class VideoProcessor:
                 else:
                     print("No inference results")
                 
-                # Tích hợp batch processing mỗi 5 frame
+                # Xử lý depth mỗi 5 frame
                 if self.frame_count % 5 == 0:
-                    # Thu thập 5 frame liên tiếp để xử lý batch
-                    batch_frames = [self.camera.get_frame() for _ in range(5)]
-                    self._update_depth_estimation(batch_frames)
+                    try:
+                        # Chỉ xử lý frame hiện tại
+                        if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
+                            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                                # Chuyển frame sang RGB và đảm bảo contiguous
+                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                if not rgb_frame.flags['C_CONTIGUOUS']:
+                                    rgb_frame = np.ascontiguousarray(rgb_frame)
+                                
+                                # Sử dụng infer_image với input_size là bội số của 14
+                                input_size = ((max(rgb_frame.shape[:2]) + 13) // 14) * 14
+                                print(f"[DEBUG] Processing frame with input_size={input_size}, shape={rgb_frame.shape}, dtype={rgb_frame.dtype}")
+                                depth = self.depth_estimator.model.infer_image(rgb_frame, input_size=input_size)
+                                depth_heatmap, _ = self.depth_estimator.get_heatmap(depth)
+                                self.last_depth_heatmap = depth_heatmap
+                                self.last_calibrated_depth = depth
+                                torch.cuda.empty_cache()
+                    except Exception as e:
+                        print(f"Depth estimation error: {e}")
                 # Nếu đã có heatmap từ vòng trước, sử dụng lại
                 # Đảm bảo annotated_frame là numpy array hợp lệ
                 if annotated_frame is not None and isinstance(annotated_frame, np.ndarray):

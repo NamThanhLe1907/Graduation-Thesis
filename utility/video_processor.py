@@ -23,12 +23,15 @@ class VideoProcessor:
         self.post_processor = PostProcessor(alpha=0.2)
         self.performance_monitor = PerformanceMonitor()
         self.depth_estimator = DepthEstimatorV2(
-            max_depth=5.75,
+            max_depth=1,
             encoder='vitb',
             checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vitb.pth',
             device='cuda'  # Thêm device parameter
         )
         self.running = False
+
+        # Đơn vị hiển thị depth cho bounding box: 'cm' hoặc 'mm'
+        self.depth_unit = 'cm'  # hoặc 'mm'
 
         # Định nghĩa bảng màu cho các lớp (bạn có thể điều chỉnh theo số lượng và mong muốn)
         self.color_map = {
@@ -130,10 +133,18 @@ class VideoProcessor:
                                     y_end = min(y + h, self.last_calibrated_depth.shape[0])
                                     region = self.last_calibrated_depth[y:y_end, x:x_end]
                                     if region.size > 0:
-                                        d_min = region.min()
-                                        d_mean = region.mean()
-                                        d_max = region.max()
-                                        label_text += f" | D: {d_mean:.2f}m"
+                                        if self.depth_unit == 'mm':
+                                            scale_factor = 1000
+                                            unit_label = 'mm'
+                                            decimals = 0
+                                        else:  # mặc định cm
+                                            scale_factor = 100
+                                            unit_label = 'cm'
+                                            decimals = 3
+                                        d_min = region.min() * scale_factor
+                                        d_mean = region.mean() * scale_factor
+                                        d_max = region.max() * scale_factor
+                                        label_text += f" | D: {d_mean:.{decimals}f}{unit_label}"
                                 except Exception as e:
                                     pass
                             
@@ -163,7 +174,7 @@ class VideoProcessor:
                     print("No inference results")
                 
                 # Xử lý depth mỗi 5 frame
-                if self.frame_count % 5 == 0:
+                if self.frame_count % 30 == 0:
                     try:
                         # Chỉ xử lý frame hiện tại
                         if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
@@ -177,7 +188,10 @@ class VideoProcessor:
                                 input_size = ((max(rgb_frame.shape[:2]) + 13) // 14) * 14
                                 print(f"[DEBUG] Processing frame with input_size={input_size}, shape={rgb_frame.shape}, dtype={rgb_frame.dtype}")
                                 depth = self.depth_estimator.model.infer_image(rgb_frame, input_size=input_size)
-                                depth_heatmap, _ = self.depth_estimator.get_heatmap(depth)
+                                # Áp dụng hệ số hiệu chuẩn để scale về đúng khoảng cách thực tế
+                                calibration_scale = 6.22  # scale factor hiệu chuẩn, dựa trên thực nghiệm
+                                depth = depth * calibration_scale
+                                depth_heatmap, _ = self.depth_estimator.get_heatmap(depth, unit= 'cm')
                                 self.last_depth_heatmap = depth_heatmap
                                 self.last_calibrated_depth = depth
                                 torch.cuda.empty_cache()

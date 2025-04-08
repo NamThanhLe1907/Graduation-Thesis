@@ -4,7 +4,10 @@ import numpy as np
 from utility.Depth_Anything.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 
 class DepthEstimatorV2:
-    def __init__(self, max_depth=5.75, encoder='vitb', checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vitb.pth', device='cuda'):
+    def __init__(self, max_depth=0.6, encoder='vitb', checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vitb.pth', device='cuda'):
+        """
+        max_depth: giá trị tối đa (tính bằng mét) mà mô hình dự đoán, ví dụ 1.2 cho 120cm
+        """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         
         model_configs = {
@@ -12,7 +15,7 @@ class DepthEstimatorV2:
             'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
             'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
         }
-        self.max_depth = max_depth
+        self.max_depth = max_depth  # đơn vị mét
         self.model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth}).to(self.device)
         self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
         self.model.eval()
@@ -24,23 +27,33 @@ class DepthEstimatorV2:
             depths = depths.detach()
         return depths
 
-    def get_heatmap(self, depth_map):
-        """Tạo heatmap từ depth map"""
+    def get_heatmap(self, depth_map, unit='cm'):
+        """
+        Tạo heatmap từ depth map với đơn vị mong muốn.
+        unit: 'm', 'cm', hoặc 'mm'
+        """
+        # Chuyển đổi đơn vị
+        if unit == 'cm':
+            depth_map = depth_map * 100
+        elif unit == 'mm':
+            depth_map = depth_map * 1000
+        # nếu 'm' thì giữ nguyên
+
         min_val = np.min(depth_map)
         max_val = np.max(depth_map)
         mean_val = np.mean(depth_map)
         
-        # Chuẩn hóa depth map về khoảng 0-255
+        # Chuẩn hóa depth map về khoảng 0-255 để hiển thị màu
         depth_norm = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX)
         depth_norm = depth_norm.astype(np.uint8)
         heatmap = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
         
-        # Thêm thông số thống kê lên heatmap
-        cv2.putText(heatmap, f"Min: {min_val:.2f}", (10, 30), 
+        # Thêm thông số thống kê lên heatmap, kèm đơn vị
+        cv2.putText(heatmap, f"Min: {min_val:.1f} {unit}", (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-        cv2.putText(heatmap, f"Max: {max_val:.2f}", (10, 70), 
+        cv2.putText(heatmap, f"Max: {max_val:.1f} {unit}", (10, 70), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-        cv2.putText(heatmap, f"Mean: {mean_val:.2f}", (10, 110), 
+        cv2.putText(heatmap, f"Mean: {mean_val:.1f} {unit}", (10, 110), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
         
         return heatmap, (min_val, max_val, mean_val)

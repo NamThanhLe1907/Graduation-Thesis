@@ -23,7 +23,7 @@ class PostProcessor:
         """
         valid_indices = []
         img_area = frame_resolution[0] * frame_resolution[1]
-        print("DEBUG: Image area:", img_area)
+        # print("DEBUG: Image area:", img_area)
         for i, box in enumerate(boxes):
             xc, yc, w, h, theta = box
             # Tính kích thước thực sau khi xoay
@@ -33,14 +33,14 @@ class PostProcessor:
             effective_h = w * sin_t + h * cos_t
 
             normalized_area = (effective_w * effective_h) / img_area
-            print(f"DEBUG: Box {i} - NormArea: {normalized_area:.4f}, W: {effective_w:.2f}, H: {effective_h:.2f}, Theta: {np.rad2deg(theta):.1f}°")
+            # print(f"DEBUG: Box {i} - NormArea: {normalized_area:.4f}, W: {effective_w:.2f}, H: {effective_h:.2f}, Theta: {np.rad2deg(theta):.1f}°")
             wh_ratio = effective_w / effective_h if effective_h > 0 else 0
 
             # Thiết lập ngưỡng động dựa trên góc xoay
             rotation_factor = np.abs(theta) / np.pi  # từ 0 đến 1
             dynamic_ratio_min = max(0.1, self.wh_ratio_range[0] * (1 - rotation_factor))
             dynamic_ratio_max = min(10.0, self.wh_ratio_range[1] * (1 + rotation_factor))
-            print(f"DEBUG: Box {i} - Dynamic Ratio Min: {dynamic_ratio_min:.2f}, Max: {dynamic_ratio_max:.2f}")
+            # print(f"DEBUG: Box {i} - Dynamic Ratio Min: {dynamic_ratio_min:.2f}, Max: {dynamic_ratio_max:.2f}")
             # keep = True
             # if normalized_area < self.min_area:
             #     print(f"Box {i} rejected: NormArea {normalized_area:.4f} < min {self.min_area}")

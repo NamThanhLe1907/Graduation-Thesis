@@ -9,6 +9,9 @@ from utility.performance_monitor import PerformanceMonitor
 # from src.Module_division import DivisionModule
 import time
 from utility.depth_calculate_v2 import DepthEstimatorV2
+import threading
+from queue import Queue
+
 
 class VideoProcessor:
     def __init__(self, gui):
@@ -24,8 +27,8 @@ class VideoProcessor:
         self.performance_monitor = PerformanceMonitor()
         self.depth_estimator = DepthEstimatorV2(
             max_depth=1,
-            encoder='vitb',
-            checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vitb.pth',
+            encoder='vits',
+            checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vits.pth',
             device='cuda'  # Thêm device parameter
         )
         self.running = False
@@ -46,8 +49,163 @@ class VideoProcessor:
         self.frame_count = 0
 
     def start_processing(self):
+
         self.running = True
         self.camera.initialize()
+
+        # Khởi tạo lock và queue cho đồng bộ hóa
+        self.frame_lock = threading.Lock()
+        self.yolo_lock = threading.Lock()
+        self.depth_lock = threading.Lock()
+        self.frame_queue = Queue(maxsize=1)
+        self.yolo_queue = Queue(maxsize=1)
+        self.depth_queue = Queue(maxsize=1)
+
+        # Thread YOLO (chạy trước)
+        def yolo_loop():
+            while self.running:
+                try:
+                    # Lấy frame mới nhất từ queue
+                    frame = self.frame_queue.get_nowait()
+                    
+                    # Tiền xử lý và chạy YOLO
+                    processed = self.processor.preprocess_frame(frame)
+                    results = self.yolo_inference.infer(processed)
+                    
+                    with self.yolo_lock:
+                        self.last_yolo_results = results
+                        # Clear queue
+                        while not self.yolo_queue.empty():
+                            self.yolo_queue.get_nowait()
+                        self.yolo_queue.put(results)
+                        
+                        # Nếu có kết quả YOLO, đẩy frame và results vào queue depth
+                        if results and len(results) > 0 and results[0].obb:
+                            while not self.depth_queue.empty():
+                                self.depth_queue.get_nowait()
+                            self.depth_queue.put((frame.copy(), results))
+                    
+                except:
+                    pass
+                time.sleep(0.001)
+
+        # Thread Depth (chạy sau khi có YOLO)
+        def depth_loop():
+            frame_counter = 0
+            while self.running:
+                try:
+                    # Lấy frame và kết quả YOLO từ queue
+                    try:
+                        frame, results = self.depth_queue.get_nowait()
+                    except Exception as e_queue:
+                        import queue as py_queue
+                        if isinstance(e_queue, py_queue.Empty):
+                            # Queue rỗng, không phải lỗi, bỏ qua
+                            time.sleep(0.005)
+                            continue
+                        else:
+                            # Lỗi khác, in ra
+                            import traceback
+                            print(f"❌ [DEPTH ERROR] Frame #{frame_counter} | Queue error: {str(e_queue)}")
+                            print(f"📜 [STACK TRACE]\n{traceback.format_exc()}")
+                            time.sleep(0.01)
+                            continue
+
+                    frame_counter += 1
+                    
+                    if results and len(results) > 0 and results[0].obb:
+                        obb = results[0].obb
+                        print(f"🔍 [DEPTH] Frame #{frame_counter} | Processing {len(obb)} objects")
+                        start_time = time.time()
+                        
+                        # Chỉ tính depth cho các vùng có object
+                        for box in obb.xyxyxyxy:
+                            # Crop frame với boundary check
+                            if isinstance(box, torch.Tensor):
+                                pts = box.detach().cpu().numpy().reshape(4, 2).astype(int)
+                            else:
+                                pts = np.array(box).reshape(4, 2).astype(int)
+                            x, y, w, h = cv2.boundingRect(pts)
+                            # Validate boundary
+                            x = max(0, x)
+                            y = max(0, y)
+                            w = min(w, frame.shape[1] - x)
+                            h = min(h, frame.shape[0] - y)
+                            if w <= 10 or h <= 10:  # Skip quá nhỏ
+                                print(f"⚠️ [SKIP] Box too small: {w}x{h}")
+                                continue
+                            cropped = frame[y:y+h, x:x+w]
+                            
+                            if cropped.size > 0 and len(cropped.shape) == 3:
+                                # Chuyển sang RGB và tính depth
+                                rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+                                if not rgb.flags['C_CONTIGUOUS']:
+                                    rgb = np.ascontiguousarray(rgb)
+                                
+                                input_size = ((max(rgb.shape[:2]) + 13) // 14) * 14
+                                depth = self.depth_estimator.model.infer_image(rgb, input_size=input_size)
+                                # Dynamic scale based on max_depth
+                                depth_scale = self.depth_estimator.max_depth / 10.0  # 10.0 là max_depth mặc định của model
+                                depth = depth * depth_scale
+                                
+                                # Debug và xử lý depth map
+                                print(f"🔧 [DEBUG] Depth type: {type(depth)}, shape: {depth.shape if hasattr(depth, 'shape') else 'N/A'}")
+                                try:
+                                    if isinstance(depth, torch.Tensor):
+                                        print(f"⚙️ [TENSOR INFO] Device: {depth.device}, Type: {depth.dtype}")
+                                        depth_np = depth.detach().cpu().numpy()
+                                        print(f"🔄 [CONVERSION] Converted to numpy array | Shape: {depth_np.shape}")
+                                    elif isinstance(depth, np.ndarray):
+                                        depth_np = depth
+                                        print(f"🔢 [NUMPY ARRAY] Direct use | Shape: {depth_np.shape}")
+                                    else:
+                                        # Trường hợp không rõ kiểu dữ liệu
+                                        print(f"⚠️ [WARNING] Depth data is neither Tensor nor ndarray. Type: {type(depth)}. Attempting to convert to numpy array.")
+                                        try:
+                                            depth_np = np.array(depth)
+                                            print(f"✅ [CONVERTED] Converted to numpy array | Shape: {depth_np.shape}")
+                                        except Exception as e_conv:
+                                            print(f"❌ [ERROR] Failed to convert depth to numpy array: {e_conv}")
+                                            continue  # bỏ qua frame này
+                                    
+                                    print(f"📊 [DEPTH STATS] Min: {depth_np.min():.2f}, Max: {depth_np.max():.2f}")
+                                    
+                                    with self.depth_lock:
+                                        # Đảm bảo depth_np là numpy array trước khi gọi astype
+                                        if not isinstance(depth_np, np.ndarray):
+                                            try:
+                                                depth_np = np.array(depth_np)
+                                            except:
+                                                print(f"❌ [ERROR] Cannot convert depth to numpy array for astype(). Skipping this frame.")
+                                                continue
+                                        self.last_calibrated_depth = depth_np.astype(np.float32)
+                                        print(f"🔒 [LOCK ACQUIRED] Depth map saved")
+                                        
+                                        heatmap, _ = self.depth_estimator.get_heatmap(depth_np, unit='cm')
+                                        print(f"🎨 [HEATMAP] Generated | Shape: {heatmap.shape}")
+                                        self.last_depth_heatmap = heatmap
+                                    
+                                except Exception as e:
+                                    import traceback
+                                    print(f"🔥 [DEPTH ERROR] Frame #{frame_counter} | {str(e)}")
+                                    print(f"📜 [STACK TRACE]\n{traceback.format_exc()}")
+                                    torch.cuda.empty_cache()
+                                    time.sleep(0.1)  # Giảm tải GPU
+                                continue
+                                
+                            torch.cuda.empty_cache()
+                        
+                        proc_time = time.time() - start_time
+                        print(f"✅ [DEPTH] Frame #{frame_counter} | Processed in {proc_time:.2f}s")
+                                
+                except Exception as e:
+                    import traceback
+                    print(f"❌ [DEPTH ERROR] Frame #{frame_counter} | {str(e)}")
+                    print(f"📜 [STACK TRACE]\n{traceback.format_exc()}")
+                time.sleep(0.01)
+
+        threading.Thread(target=yolo_loop, daemon=True).start()
+        threading.Thread(target=depth_loop, daemon=True).start()
 
         while self.running:
             try:
@@ -59,16 +217,24 @@ class VideoProcessor:
                 if frame is None:
                     continue
 
+                # Đẩy frame vào queue và đảm bảo chỉ giữ frame mới nhất
+                try:
+                    # Clear queue nếu có nhiều hơn 1 frame chờ xử lý
+                    while not self.frame_queue.empty():
+                        self.frame_queue.get_nowait()
+                    self.frame_queue.put_nowait(frame.copy())
+                except:
+                    pass
+
                 # Tiền xử lý khung hình
                 processed_frame = self.processor.preprocess_frame(frame)
                 annotated_frame = processed_frame.copy()
                 img_w, img_h = frame.shape[1], frame.shape[0]
                 img_size = (img_w, img_h)
                 
-                # Chạy inference của YOLO
-                results = self.yolo_inference.infer(processed_frame)
-                print(f"YOLO results: {len(results)} detections")
-                
+                # Lấy kết quả YOLO mới nhất
+                results = getattr(self, 'last_yolo_results', None)
+                  
                 # Xử lý kết quả YOLO (như trước)
                 if results and len(results) > 0:
                     if results[0].obb:
@@ -173,30 +339,6 @@ class VideoProcessor:
                 else:
                     print("No inference results")
                 
-                # Xử lý depth mỗi 5 frame
-                if self.frame_count % 30 == 0:
-                    try:
-                        # Chỉ xử lý frame hiện tại
-                        if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
-                            if len(frame.shape) == 3 and frame.shape[2] == 3:
-                                # Chuyển frame sang RGB và đảm bảo contiguous
-                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                if not rgb_frame.flags['C_CONTIGUOUS']:
-                                    rgb_frame = np.ascontiguousarray(rgb_frame)
-                                
-                                # Sử dụng infer_image với input_size là bội số của 14
-                                input_size = ((max(rgb_frame.shape[:2]) + 13) // 14) * 14
-                                print(f"[DEBUG] Processing frame with input_size={input_size}, shape={rgb_frame.shape}, dtype={rgb_frame.dtype}")
-                                depth = self.depth_estimator.model.infer_image(rgb_frame, input_size=input_size)
-                                # Áp dụng hệ số hiệu chuẩn để scale về đúng khoảng cách thực tế
-                                calibration_scale = 6.22  # scale factor hiệu chuẩn, dựa trên thực nghiệm
-                                depth = depth * calibration_scale
-                                depth_heatmap, _ = self.depth_estimator.get_heatmap(depth, unit= 'cm')
-                                self.last_depth_heatmap = depth_heatmap
-                                self.last_calibrated_depth = depth
-                                torch.cuda.empty_cache()
-                    except Exception as e:
-                        print(f"Depth estimation error: {e}")
                 # Nếu đã có heatmap từ vòng trước, sử dụng lại
                 # Đảm bảo annotated_frame là numpy array hợp lệ
                 if annotated_frame is not None and isinstance(annotated_frame, np.ndarray):

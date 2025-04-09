@@ -1,6 +1,24 @@
 import cv2
 import torch
 import numpy as np
+
+# Kiểm tra và patch XFormers
+try:
+    import xformers
+    import xformers.ops
+    print("XFormers đã được cài đặt và có thể sử dụng.")
+
+    import torch.nn.functional as F
+
+    def xformers_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False):
+        # Bỏ qua mask và dropout để đơn giản
+        return xformers.ops.memory_efficient_attention(query, key, value)
+
+    F.scaled_dot_product_attention = xformers_attention
+    print("Đã ghi đè scaled_dot_product_attention để dùng xformers.ops.memory_efficient_attention.")
+except ImportError:
+    print("XFormers chưa được cài đặt hoặc không khả dụng.")
+
 from utility.Depth_Anything.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 
 class DepthEstimatorV2:
@@ -10,28 +28,55 @@ class DepthEstimatorV2:
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         
+        # Kiểm tra XFormers
+        try:
+            import xformers
+            self.use_xformers = True
+        except ImportError:
+            self.use_xformers = False
+
         model_configs = {
             'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
             'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
             'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
         }
         self.max_depth = max_depth  # đơn vị mét
-        self.model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth}).to(self.device)
-        self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
-        self.model.eval()
+        
+        try:
+            self.model = DepthAnythingV2(
+                **{**model_configs[encoder], 'max_depth': max_depth}
+            ).to(self.device)
+            
+            state_dict = torch.load(checkpoint_path, map_location=self.device)
+            self.model.load_state_dict(state_dict)
+            self.model.eval()
+        except Exception as e:
+            raise RuntimeError(f"Model initialization failed: {str(e)}")
 
     def infer(self, batch_tensor):
         """Nhận batch tensor (B, 3, H, W) đã chuẩn hóa"""
         with torch.no_grad():
-            depths = self.model.infer_image(batch_tensor)
-            depths = depths.detach()
-        return depths
+            try:
+                depths = self.model.infer_image(batch_tensor)
+                return depths.detach()
+            except Exception as e:
+                torch.cuda.empty_cache()
+                raise RuntimeError(f"Inference failed: {str(e)}")
 
     def get_heatmap(self, depth_map, unit='cm'):
         """
         Tạo heatmap từ depth map với đơn vị mong muốn.
         unit: 'm', 'cm', hoặc 'mm'
         """
+        # Nếu depth_map là Tensor, convert sang numpy
+        if isinstance(depth_map, torch.Tensor):
+            depth_map = depth_map.detach().cpu().numpy()
+        elif not isinstance(depth_map, np.ndarray):
+            try:
+                depth_map = np.array(depth_map)
+            except:
+                raise TypeError(f"depth_map must be a numpy array or tensor, but got {type(depth_map)}")
+
         # Chuyển đổi đơn vị
         if unit == 'cm':
             depth_map = depth_map * 100

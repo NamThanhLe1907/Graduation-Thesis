@@ -2,6 +2,24 @@ import cv2
 import torch
 import numpy as np
 
+# Kiểm tra XFormers
+try:
+    import xformers
+    import xformers.ops
+    print("XFormers đã được cài đặt và có thể sử dụng.")
+
+    # Monkey patch scaled_dot_product_attention để dùng xformers
+    import torch.nn.functional as F
+
+    def xformers_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False):
+        # Bỏ qua mask và dropout để đơn giản
+        return xformers.ops.memory_efficient_attention(query, key, value)
+
+    F.scaled_dot_product_attention = xformers_attention
+    print("Đã ghi đè scaled_dot_product_attention để dùng xformers.ops.memory_efficient_attention.")
+except ImportError:
+    print("XFormers chưa được cài đặt hoặc không khả dụng.")
+
 from Depth_Anything.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 
 model_configs = {

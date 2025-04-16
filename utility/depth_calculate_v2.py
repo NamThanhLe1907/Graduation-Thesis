@@ -1,5 +1,6 @@
 import cv2
 import torch
+from utility.Depth_Anything.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 import numpy as np
 
 # Kiểm tra và patch XFormers
@@ -18,8 +19,6 @@ try:
     print("Đã ghi đè scaled_dot_product_attention để dùng xformers.ops.memory_efficient_attention.")
 except ImportError:
     print("XFormers chưa được cài đặt hoặc không khả dụng.")
-
-from utility.Depth_Anything.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 
 class DepthEstimatorV2:
     def __init__(self, max_depth=0.6, encoder='vitb', checkpoint_path='utility/checkpoint/depth_anything_v2_metric_hypersim_vitb.pth', device='cuda'):

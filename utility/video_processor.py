@@ -217,6 +217,31 @@ class VideoProcessor:
                 if frame is None:
                     continue
 
+                # TÍNH FULL FRAME DEPTH NGAY SAU KHI LẤY FRAME
+                try:
+                    rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if not rgb_full.flags['C_CONTIGUOUS']:
+                        rgb_full = np.ascontiguousarray(rgb_full)
+                    # Đảm bảo kích thước chia hết cho 14
+                    input_size = ((max(rgb_full.shape[:2]) + 13) // 14) * 14
+                    depth_full = self.depth_estimator.model.infer_image(rgb_full, input_size=input_size)
+                    # Scale depth theo max_depth
+                    scale_factor = self.depth_estimator.max_depth / 10.0
+                    depth_full = depth_full * scale_factor
+
+                    # Convert tensor sang numpy nếu cần
+                    if isinstance(depth_full, torch.Tensor):
+                        depth_full_np = depth_full.detach().cpu().numpy()
+                    elif isinstance(depth_full, np.ndarray):
+                        depth_full_np = depth_full
+                    else:
+                        depth_full_np = np.array(depth_full)
+
+                    self.last_calibrated_depth = depth_full_np.astype(np.float32)
+                except:
+                    pass
+# Tạo heatmap cho full frame depth heatmap_full, _ = self.depth_estimator.get_heatmap(depth_full_np, unit='cm') self.last_depth_heatmap = heatmap_full except Exception as e: print(f"[FULL FRAME DEPTH ERROR] {e}")
+
                 # Đẩy frame vào queue và đảm bảo chỉ giữ frame mới nhất
                 try:
                     # Clear queue nếu có nhiều hơn 1 frame chờ xử lý
@@ -271,6 +296,9 @@ class VideoProcessor:
                         rotated_boxes = obb.xyxyxyxy.detach().cpu().numpy()
                         indices = valid_indices if valid_indices is not None else range(len(rotated_boxes))
                         
+                        from collections import defaultdict
+                        class_depths = defaultdict(list)
+
                         for idx in indices:
                             poly = rotated_boxes[idx]
                             cls_id = obb.cls.detach().cpu().numpy()[idx]
@@ -311,6 +339,8 @@ class VideoProcessor:
                                         d_mean = region.mean() * scale_factor
                                         d_max = region.max() * scale_factor
                                         label_text += f" | D: {d_mean:.{decimals}f}{unit_label}"
+                                        # Lưu mean depth vào dict theo class
+                                        class_depths[cls_id].append(d_mean)
                                 except Exception as e:
                                     pass
                             
@@ -319,7 +349,46 @@ class VideoProcessor:
                             text_pos = (int(xmin), int(ymax))
                             cv2.putText(annotated_frame, label_text, text_pos,
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2)
-                            
+                        
+                        # Sau khi duyệt hết các box, tính trung bình theo class
+                        # Ghép thông tin khoảng cách trung bình theo class
+                        class_depth_info = ""
+                        for cls_id, depth_list in class_depths.items():
+                            if len(depth_list) > 0:
+                                mean_depth_class = np.mean(depth_list)
+                                line = f"[Class {cls_id}] Mean distance: {mean_depth_class:.2f} {unit_label} ({len(depth_list)} boxes)"
+                                print(line)
+                                class_depth_info += line + "\n"
+
+                        # Tính khoảng cách trung bình toàn ảnh (full frame)
+                        full_frame_info = ""
+                        if self.last_calibrated_depth is not None:
+                            try:
+                                full_mean = np.mean(self.last_calibrated_depth) * (1000 if self.depth_unit=='mm' else 100)
+                                full_min = np.min(self.last_calibrated_depth) * (1000 if self.depth_unit=='mm' else 100)
+                                full_max = np.max(self.last_calibrated_depth) * (1000 if self.depth_unit=='mm' else 100)
+                                full_frame_info = f"[Full Frame] Mean: {full_mean:.2f} {unit_label}, Min: {full_min:.2f} {unit_label}, Max: {full_max:.2f} {unit_label}"
+                                print(full_frame_info)
+                            except:
+                                pass
+                        
+                        # Nếu có thông tin full frame, overlay lên annotated_frame
+                        if full_frame_info:
+                            try:
+                                cv2.putText(annotated_frame, full_frame_info, (10, 20),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                            except Exception as e:
+                                print(f"Error overlaying full frame info: {e}")
+
+                        # Hiển thị lên GUI console
+                        combined_info = ""
+                        if full_frame_info:
+                            combined_info += full_frame_info + "\n"
+                        if class_depth_info.strip():
+                            combined_info += class_depth_info.strip()
+                        if combined_info.strip():
+                            self.gui.log_message(combined_info.strip(), level="INFO")
+                        
                         for (i, j) in collisions:
                             box1 = boxes[i]
                             box2 = boxes[j]

@@ -1,13 +1,13 @@
 import tkinter as tk
 from threading import Thread
 from utility.visualization import AppGUI
-from utility.video_processor import VideoProcessor
+from utility.video_processor_v2 import VideoProcessorV2
 
 
 def main():
     root = tk.Tk()
     gui = AppGUI(root)
-    processor = VideoProcessor(gui)
+    processor = VideoProcessorV2(gui)
 
     processing_thread = Thread(target=processor.start_processing)
     processing_thread.daemon = True

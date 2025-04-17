@@ -25,6 +25,9 @@ class DepthEstimatorV2:
         """
         max_depth: giá trị tối đa (tính bằng mét) mà mô hình dự đoán, ví dụ 1.2 cho 120cm
         """
+        self.use_amp = True  # Tự động mixed precision
+        self.downsample_ratio = 0.5  # Giảm kích thước ảnh đầu vào
+        self.frame_skip = 2  # Xử lý 1/2 frame
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         
         # Kiểm tra XFormers
@@ -54,7 +57,7 @@ class DepthEstimatorV2:
 
     def infer(self, batch_tensor):
         """Nhận batch tensor (B, 3, H, W) đã chuẩn hóa"""
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.use_amp):
             try:
                 depths = self.model.infer_image(batch_tensor)
                 return depths.detach()

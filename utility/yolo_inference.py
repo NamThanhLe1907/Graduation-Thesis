@@ -1,9 +1,11 @@
 from ultralytics import YOLO
 import cv2
+import torch
+from torch.cuda.amp import autocast
 
 class YOLOInference:
     def __init__(self, model_path="best.pt", conf=None, iou=0.5):
-        self.model = YOLO(model_path, task='obb').to('cpu')
+        self.model = YOLO(model_path, task='obb').half().to('cuda')  # Enable FP16 on GPU
         # Set detection thresholds
         self.model.conf = conf  # Confidence threshold
         self.model.iou = iou    # NMS IoU threshold
@@ -11,7 +13,8 @@ class YOLOInference:
     def infer(self, frame):
         """Run inference on a given frame."""
         # For OBB models we need to specify the task and use imgsz from the model
-        results = self.model(frame, task='obb', imgsz=self.model.args['imgsz'], device='cpu')
+        with autocast():
+            results = self.model(frame, task='obb', imgsz=self.model.args['imgsz'], device='cuda')
         return results
 
 if __name__ == "__main__":

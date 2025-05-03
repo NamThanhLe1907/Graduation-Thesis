@@ -4,4 +4,4 @@ from utility.frame_processor import FrameProcessor
 from utility.yolo_inference import YOLOInference
 from utility.postprocessing import PostProcessor
 from utility.performance_monitor import PerformanceMonitor
-from utility.depth_calculate_v2 import DepthEstimatorV2
+from utility.depth_calculate import DepthEstimator

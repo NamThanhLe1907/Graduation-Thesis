@@ -1,38 +1,46 @@
-import threading
-from queue import Queue
+from queue import Queue, Full, Empty 
+from utility import (YOLOInference,
+                     DepthEstimator)
 
-class QueueManager:
-    def __init__(self, maxsize=1):
-        self.queue = Queue(maxsize=maxsize)
-        self.lock = threading.Lock()
+
+class QueueManger:
+    """
+    - put(item): ghi đè image cũ
+    - get(timeout): lấy image, trả về None nếu timeout
+    - task_done(): biến báo đã xử lý xong image
+    - clear(): xóa hàng đợi
+    """ 
+
+    def __init__(self):
+        self._q = Queue(maxsize= 1)
         
-    def put(self, item, timeout=0.1):
-        with self.lock:
-            # Clear queue if full
-            while not self.queue.empty():
-                try:
-                    self.queue.get_nowait()
-                except:
-                    break
-            try:
-                self.queue.put(item, timeout=timeout)
-                return True
-            except:
-                return False
-
-    def full(self):
-        """Check if queue is full"""
-        with self.lock:
-            return self.queue.full()
-
-    def get(self, timeout=0.1):
-        with self.lock:
-            try:
-                return self.queue.get(timeout=timeout)
-            except:
-                return None
-
+    #Producer
+    def put(self,image):
+        try:
+            self._q.put_nowait(image)
+        except Full:
+            try: 
+                self._q.get_nowait()
+            except Empty:
+                pass
+            self._q.put_nowait(image)
+        return True
+    
+    #Consumer
+    
+    def get(self, timeout = None):
+        try:
+            return self._q.get(timeout=timeout)
+        except Empty:
+            return None
+        
+    def task_done(self):
+        self._q.task_done()
+    
     def clear(self):
-        with self.lock:
-            while not self.queue.empty():
-                self.queue.get_nowait()
+        while  not self._q.empty():
+            try:
+                self._q.get_nowait()
+            except Empty:
+                break
+            

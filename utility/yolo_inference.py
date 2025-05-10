@@ -13,7 +13,7 @@ class YOLOInference:
     def infer(self, frame):
         """Run inference on a given frame."""
         # For OBB models we need to specify the task and use imgsz from the model
-        with autocast():
+        with torch.amp.autocast('cuda'):  # Using updated syntax for autocast
             results = self.model(frame, task='obb', imgsz=self.model.args['imgsz'], device='cuda')
         return results
 

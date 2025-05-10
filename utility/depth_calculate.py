@@ -16,8 +16,10 @@ class DepthEstimator:
     ) -> None:
         self.model_name = model_name
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        dtype = torch.float16 if (fp16 and self.device.type == "cuda" ) else torch.float32
+        self.fp16 = fp16 and self.device.type == "cuda"
+        dtype = torch.float16 if self.fp16 else torch.float32
         
+        print(f"[DepthEstimator] Initializing with dtype: {dtype}, device: {self.device}")
         self.processor = AutoImageProcessor.from_pretrained(model_name)
         self.model = (
             AutoModelForDepthEstimation.from_pretrained(model_name, torch_dtype = dtype)
@@ -48,10 +50,24 @@ class DepthEstimator:
         
         #Post_processing
         
-        inputs = self.processor(images=image, return_tensors= "pt").to(self.device)
+        inputs = self.processor(images=image, return_tensors="pt")
         
-        #Suy luan
-        outputs =  self.model(**inputs)
+        # Chuyển đổi inputs sang đúng kiểu dữ liệu và device như model
+        for key, value in inputs.items():
+            if isinstance(value, torch.Tensor):
+                if self.fp16:
+                    # Chỉ chuyển sang float16 nếu model dùng fp16
+                    inputs[key] = value.to(self.device, dtype=torch.float16)
+                else:
+                    inputs[key] = value.to(self.device)
+        
+        # Suy luận với torch.amp.autocast nếu sử dụng fp16
+        if self.fp16:
+            with torch.amp.autocast('cuda'):
+                outputs = self.model(**inputs)
+        else:
+            outputs = self.model(**inputs)
+            
         depth = outputs.predicted_depth # (1,H',W')
         
         if upscale:
@@ -107,3 +123,50 @@ class DepthEstimator:
             heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
           
         return heatmap, (min_v, max_v, mean_v)
+    
+    def estimate_depth(self, frame, bounding_boxes):
+        """
+        Calculating the depth of the bounding box in the frame.
+        
+        Parameters
+        ----------
+        frame : np.ndarray
+        bounding_boxes : list
+        
+        Returns:
+        
+        
+        
+        """
+        
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(rgb_frame)
+        
+        depth_map, _ = self.infer(pil_image)
+        
+        results = []
+        
+        for box in bounding_boxes:
+            x1, y1, x2, y2 = box['bbox']
+            
+            x1, y1 = max(0,int(x1)), max(0,int(y1))
+            x2, y2 = min(int(x2), depth_map.shape[1] -1), min(int(y2), depth_map.shape[0] -1)
+
+            depth_region = depth_map[y1:y2, x1:x2]
+            
+            if depth_region.size > 0:
+                mean_depth = float(np.mean(depth_region))
+                min_depth =  float(np.min(depth_region))
+                max_depth = float(np.max(depth_region))
+            else:
+                mean_depth = min_depth = max_depth = 0.0
+                
+            results.append({
+                'bbox': box['bbox'],
+                'mean_depth': mean_depth,
+                'min_depth': min_depth,
+                'max_depth': max_depth,
+            })
+        return results
+    
+    

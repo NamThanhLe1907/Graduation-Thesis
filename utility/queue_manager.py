@@ -1,69 +1,60 @@
-from multiprocessing import Queue
-from queue import Full, Empty 
+"""
+QueueManager – wrapper cực mỏng cho multiprocessing.Queue
+với hành vi *overwrite‑on‑full* (bỏ frame cũ, giữ frame mới).
+Chạy an toàn cả trên Windows (spawn) lẫn Linux (fork).
+"""
+from __future__ import annotations
+
+import multiprocessing as mp
+from queue import Empty, Full
 from typing import Any, Optional
 
+
 class QueueManager:
-    """Quản lý một FIFO queue dùng giữa các process.
+    def __init__(self, maxsize: int = 1) -> None:
+        # Lấy context phù hợp (spawn / fork / forkserver)
+        ctx = mp.get_context()
+        self._q: mp.Queue[Any] = ctx.Queue(maxsize=maxsize)
 
-    Parameters
-    ----------
-    maxsize : int, default 1
-        Số phần tử tối đa. Khi đầy, phần tử cũ nhất sẽ bị loại bỏ để nhường
-        chỗ cho phần tử mới (overwrite‑on‑full). Điều này giúp producer không
-        bị block và luôn xử lý frame mới nhất.
-    """
-
-    def __init__(self, maxsize: int = 1):
-        self._q: Queue[Any] = Queue(maxsize = maxsize)
-        
-    #Producer
-    def put(self,item: Any) -> bool:
-        """Đưa *item*  vào Queue và thay cũ"""
+    # ---------- Producer ----------
+    def put(self, item: Any) -> bool:
         try:
             self._q.put_nowait(item)
-        except Exception:
-            try:
+        except Full:
+            try:                     # bỏ phần tử cũ nhất
                 self._q.get_nowait()
             except Empty:
-                pass 
+                pass
             self._q.put_nowait(item)
         return True
-    
-    #Consumer
-    
-    def get(self, timeout: Optional[float] = None) -> Any:
-        """Lấy và xóa một item khỏi queue.
-        Trả về ``None`` nếu hết thời gian chờ mà không có dữ liệu.
-        """
+
+    # ---------- Consumer ----------
+    def get(self, timeout: Optional[float] = None) -> Any | None:
         try:
             return self._q.get(timeout=timeout)
         except Empty:
             return None
-        
-    def clear(self) -> None:
-        """
-        Xóa sạch các item còn lại trong queue.
-        """
-        while True:     
-            try:
-                self._q.get_nowait()
-            except Empty:
-                break
-            
+
+    # ---------- Helpers ----------
     def empty(self) -> bool:
         try:
             return self._q.empty()
         except NotImplementedError:
             return False
-        
+
     def full(self) -> bool:
         try:
             return self._q.full()
-        except  NotImplementedError:
+        except NotImplementedError:
             return False
-        
+
     def qsize(self) -> int:
         try:
             return self._q.qsize()
         except NotImplementedError:
             return 0
+
+    def clear(self) -> None:
+        while self.get(timeout=0) is not None:
+            pass
+

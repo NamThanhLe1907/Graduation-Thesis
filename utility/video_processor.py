@@ -11,7 +11,7 @@ import traceback
 import sys
 from typing import Any, Callable
 
-from utility.queue_manager import QueueManager
+from utility.archived.queue_manager import QueueManager
 
 # ---------------------------------------------------------------------
 # QUAN TRỌNG: Worker function PHẢI ở top-level module để hoạt động với Windows

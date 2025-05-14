@@ -5,7 +5,7 @@ import sys
 import tkinter as tk
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from utility.visualization import AppGUI
+from utility.archived.visualization import AppGUI
 
 class TestAppGUI(unittest.TestCase):
     def setUp(self):

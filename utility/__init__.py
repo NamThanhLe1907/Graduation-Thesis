@@ -1,4 +1,4 @@
-from utility.queue_manager import QueueManager
+from utility.archived.queue_manager import QueueManager
 from utility.camera_interface import CameraInterface
 from utility.frame_processor import FrameProcessor
 from utility.yolo_inference import YOLOInference

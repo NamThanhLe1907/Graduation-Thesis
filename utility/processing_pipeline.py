@@ -8,7 +8,7 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Tuple
 
-from utility.queue_manager import QueueManager
+from utility.archived.queue_manager import QueueManager
 
 
 # ---------------------- WORKER PROCESSES ----------------------

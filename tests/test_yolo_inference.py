@@ -10,7 +10,7 @@ class TestYOLOInference(unittest.TestCase):
     def setUp(self):
         model_path = Path(__file__).parent / 'best.pt'  # Nếu file best.pt nằm cùng thư mục tests
         self.yolo_inference = YOLOInference(model_path=str(model_path))
-        self.test_frame = cv2.imread('image_3.jpg')  # Thay thế bằng hình ảnh mẫu của bạn
+        self.test_frame = cv2.imread('assets/image_3.jpg')  # Thay thế bằng hình ảnh mẫu của bạn
 
     def test_infer(self):
         results = self.yolo_inference.infer(self.test_frame)

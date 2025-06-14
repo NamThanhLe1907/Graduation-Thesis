@@ -1,5 +1,6 @@
 """
 Cung cấp công cụ để ước tính độ sâu từ ảnh 2D bằng mô hình Depth Anything.
+Hỗ trợ cả Regular Depth và Metric Depth.
 """
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 import torch
@@ -13,27 +14,47 @@ from typing import Tuple, Union, List, Dict, Any, Optional, Callable
 class DepthEstimator:
     """
     Lớp ước tính độ sâu sử dụng mô hình Depth Anything.
+    Hỗ trợ cả Regular Depth và Metric Depth.
     """
+    
+    # Định nghĩa các model có sẵn
+    REGULAR_MODELS = {
+        'large': "depth-anything/Depth-Anything-V2-Large-hf",
+        'base': "depth-anything/Depth-Anything-V2-Base-hf", 
+        'small': "depth-anything/Depth-Anything-V2-Small-hf",
+    }
+    
+    METRIC_MODELS = {
+        'indoor_large': "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
+        'indoor_base': "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
+        'indoor_small': "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+        'outdoor_large': "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+        'outdoor_base': "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf",
+        'outdoor_small': "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf",
+    }
     
     def __init__(
         self,
-        model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",  # Thay đổi mặc định thành mô hình Small
+        model_name: str = None,
+        model_type: str = "regular",  # "regular" hoặc "metric"
+        model_size: str = "small",    # "small", "base", "large"
+        scene_type: str = "indoor",   # "indoor" hoặc "outdoor" (chỉ cho metric)
         device: Union[str, torch.device, None] = None,
         fp16: bool = True,
-        scale_factor: float = 1.0,
+        scale_factor: float = 0.5,
         enable: bool = True,
-        input_size: Optional[Tuple[int, int]] = (640, 640),  # Mặc định kích thước nhỏ
-        skip_frames: int = 20,  # Tăng số frame bỏ qua mặc định
-        async_mode: bool = True,  # Chế độ bất đồng bộ
+        input_size: Optional[Tuple[int, int]] = (640, 640),
+        skip_frames: int = 20,
+        async_mode: bool = True,
     ) -> None:
         """
         Khởi tạo ước lượng độ sâu.
         
         Args:
-            model_name: Tên mô hình từ Hugging Face Hub
-                - "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf" (chất lượng cao, chậm)
-                - "depth-anything/Depth-Anything-V2-Base-hf" (nhanh hơn, chất lượng thấp hơn)
-                - "depth-anything/Depth-Anything-V2-Small-hf" (nhỏ nhất, nhanh nhất)
+            model_name: Tên mô hình cụ thể từ Hugging Face Hub (nếu None, sẽ tự động chọn)
+            model_type: Loại mô hình ("regular" hoặc "metric")
+            model_size: Kích thước mô hình ("small", "base", "large")
+            scene_type: Loại cảnh ("indoor" hoặc "outdoor") - chỉ áp dụng cho metric
             device: Thiết bị xử lý ('cuda', 'cpu' hoặc None để tự phát hiện)
             fp16: Sử dụng half precision (FP16) nếu có thể
             scale_factor: Hệ số nhân cho độ sâu
@@ -42,6 +63,14 @@ class DepthEstimator:
             skip_frames: Số frame bỏ qua giữa các lần xử lý (0 = xử lý mọi frame)
             async_mode: Kích hoạt chế độ bất đồng bộ (sử dụng threading)
         """
+        self.model_type = model_type.lower()
+        self.model_size = model_size.lower()
+        self.scene_type = scene_type.lower()
+        
+        # Xác định model name nếu không được cung cấp
+        if model_name is None:
+            model_name = self._get_default_model_name()
+        
         self.model_name = model_name
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.fp16 = fp16 and self.device.type == "cuda"
@@ -56,7 +85,10 @@ class DepthEstimator:
         self.processing = False
         
         print(f"[DepthEstimator] Khởi tạo với dtype: {dtype}, device: {self.device}, enable: {enable}")
+        print(f"[DepthEstimator] Model type: {self.model_type}")
         print(f"[DepthEstimator] Model: {model_name}")
+        if self.model_type == "metric":
+            print(f"[DepthEstimator] Scene type: {self.scene_type}")
         if input_size:
             print(f"[DepthEstimator] Resize đầu vào: {input_size}")
         if skip_frames > 0:
@@ -82,6 +114,49 @@ class DepthEstimator:
         
         self.scale_factor = scale_factor
     
+    def _get_default_model_name(self) -> str:
+        """Lấy tên model mặc định dựa trên cấu hình."""
+        if self.model_type == "metric":
+            # Tạo key cho metric model: scene_size (ví dụ: indoor_small)
+            model_key = f"{self.scene_type}_{self.model_size}"
+            if model_key in self.METRIC_MODELS:
+                return self.METRIC_MODELS[model_key]
+            else:
+                # Fallback to indoor_small nếu không tìm thấy
+                print(f"[DepthEstimator] Không tìm thấy metric model cho {model_key}, sử dụng indoor_small")
+                return self.METRIC_MODELS['indoor_small']
+        else:
+            # Regular model
+            if self.model_size in self.REGULAR_MODELS:
+                return self.REGULAR_MODELS[self.model_size]
+            else:
+                # Fallback to small nếu không tìm thấy
+                print(f"[DepthEstimator] Không tìm thấy regular model cho {self.model_size}, sử dụng small")
+                return self.REGULAR_MODELS['small']
+    
+    @classmethod
+    def create_regular(cls, model_size: str = "small", **kwargs):
+        """
+        Factory method để tạo regular depth estimator.
+        
+        Args:
+            model_size: Kích thước model ("small", "base", "large")
+            **kwargs: Các tham số khác cho __init__
+        """
+        return cls(model_type="regular", model_size=model_size, **kwargs)
+    
+    @classmethod 
+    def create_metric(cls, scene_type: str = "indoor", model_size: str = "small", **kwargs):
+        """
+        Factory method để tạo metric depth estimator.
+        
+        Args:
+            scene_type: Loại cảnh ("indoor" hoặc "outdoor")
+            model_size: Kích thước model ("small", "base", "large")
+            **kwargs: Các tham số khác cho __init__
+        """
+        return cls(model_type="metric", scene_type=scene_type, model_size=model_size, **kwargs)
+
     @torch.inference_mode()
     def infer(
         self,
@@ -97,7 +172,7 @@ class DepthEstimator:
             
         Returns:
             Tuple: (depth_np, raw_output)
-                - depth_np: Mảng numpy depth map đơn vị mét
+                - depth_np: Mảng numpy depth map (đơn vị mét cho metric, normalized cho regular)
                 - raw_output: Tensor depth map gốc
         """
         # Nếu model bị tắt, trả về kết quả trống
@@ -156,8 +231,8 @@ class DepthEstimator:
         depth = outputs.predicted_depth  # (1, H', W')
         
         if upscale:
-            # Nội suy lên kích thước gốc
-            target_size = original_size[::-1]  # Đảo ngược width, height
+            # Nội suy lên kích thước gốc - sử dụng phương pháp tương tự code mẫu
+            target_size = original_size[::-1]  # Đảo ngược width, height (PIL -> tensor format)
             depth = F.interpolate(
                 depth.unsqueeze(1),
                 size=target_size,
@@ -257,7 +332,7 @@ class DepthEstimator:
         Returns:
             Tuple: (heatmap, stats)
                 - heatmap: Ảnh heatmap (BGR hoặc RGB)
-                - stats: (min, max, mean) thống kê độ sâu (mét)
+                - stats: (min, max, mean) thống kê độ sâu (mét cho metric, normalized cho regular)
         """
         # Tính toán thống kê
         min_v, max_v, mean_v = (
@@ -275,15 +350,21 @@ class DepthEstimator:
         # Thêm thông tin thống kê
         if overlay_stats:
             font = cv2.FONT_HERSHEY_SIMPLEX
+            unit = "m" if self.model_type == "metric" else "u"  # mét cho metric, unit cho regular
+            model_info = f"Model: {self.model_type.upper()}"
+            if self.model_type == "metric":
+                model_info += f" ({self.scene_type})"
+            
             for i, txt in enumerate((
-                f"Min: {min_v:.2f} m",
-                f"Max: {max_v:.2f} m",
-                f"Mean: {mean_v:.2f} m",
+                model_info,
+                f"Min: {min_v:.2f} {unit}",
+                f"Max: {max_v:.2f} {unit}",
+                f"Mean: {mean_v:.2f} {unit}",
             )):
                 cv2.putText(
                     heatmap, txt,
-                    (10, 30 + i * 40),  # position
-                    font, 0.8, (255, 255, 255), 2, cv2.LINE_AA
+                    (10, 30 + i * 30),  # position - giảm khoảng cách
+                    font, 0.7, (255, 255, 255), 2, cv2.LINE_AA
                 )
                 
         # Chuyển đổi sang RGB nếu cần
@@ -385,11 +466,43 @@ if __name__ == "__main__":
     import sys
     import os
     
-    # Tạo đối tượng DepthEstimator
-    depth_estimator = DepthEstimator(fp16=torch.cuda.is_available())
+    print("Demo DepthEstimator với Metric Depth")
+    print("1. Thử nghiệm Regular Depth")
+    print("2. Thử nghiệm Metric Depth (Indoor)")
+    print("3. Thử nghiệm Metric Depth (Outdoor)")
+    
+    choice = input("Chọn loại model (1/2/3): ").strip()
+    
+    # Tạo đối tượng DepthEstimator dựa trên lựa chọn
+    if choice == "1":
+        print("Khởi tạo Regular Depth model...")
+        depth_estimator = DepthEstimator.create_regular(
+            model_size="small", 
+            fp16=torch.cuda.is_available()
+        )
+    elif choice == "2":
+        print("Khởi tạo Metric Depth model (Indoor)...")
+        depth_estimator = DepthEstimator.create_metric(
+            scene_type="indoor", 
+            model_size="small", 
+            fp16=torch.cuda.is_available()
+        )
+    elif choice == "3":
+        print("Khởi tạo Metric Depth model (Outdoor)...")
+        depth_estimator = DepthEstimator.create_metric(
+            scene_type="outdoor", 
+            model_size="small", 
+            fp16=torch.cuda.is_available()
+        )
+    else:
+        print("Lựa chọn không hợp lệ!")
+        exit(1)
     
     # Đọc ảnh thử nghiệm
-    test_image_path = "sample_image.jpg"
+    test_image_path = input("Nhập đường dẫn ảnh thử nghiệm (Enter để dùng sample_image.jpg): ").strip()
+    if not test_image_path:
+        test_image_path = "sample_image.jpg"
+    
     if os.path.exists(test_image_path):
         frame = cv2.imread(test_image_path)
         
@@ -398,6 +511,8 @@ if __name__ == "__main__":
             {'bbox': [100, 100, 300, 300]},
             {'bbox': [400, 200, 600, 500]},
         ]
+        
+        print("Đang xử lý...")
         
         # Ước tính độ sâu
         depth_results = depth_estimator.estimate_depth(frame, test_boxes)
@@ -411,10 +526,20 @@ if __name__ == "__main__":
         cv2.imshow("Depth Heatmap", heatmap)
         
         # In thông tin độ sâu
-        for i, result in enumerate(depth_results):
-            print(f"Box {i+1}: Mean depth = {result['mean_depth']:.2f}m")
+        print(f"\nThống kê depth map:")
+        print(f"Min: {stats[0]:.2f}, Max: {stats[1]:.2f}, Mean: {stats[2]:.2f}")
+        print(f"Model type: {depth_estimator.model_type}")
+        if depth_estimator.model_type == "metric":
+            print(f"Scene type: {depth_estimator.scene_type}")
         
+        print(f"\nKết quả bounding boxes:")
+        for i, result in enumerate(depth_results):
+            unit = "m" if depth_estimator.model_type == "metric" else "u"
+            print(f"Box {i+1}: Mean depth = {result['mean_depth']:.2f}{unit}")
+        
+        print("\nNhấn phím bất kỳ để thoát...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     else:
-        print(f"Không tìm thấy file ảnh thử nghiệm: {test_image_path}") 
+        print(f"Không tìm thấy file ảnh thử nghiệm: {test_image_path}")
+        print("Vui lòng đặt file ảnh với tên 'sample_image.jpg' trong thư mục hiện tại hoặc chỉ định đường dẫn khác.") 

@@ -132,3 +132,7 @@ config.h.in
 .roomodes
 */checkpoint
 */Depth_Anything
+env_activate_tensorrt/
+*.engine
+*.pt
+*.onnx

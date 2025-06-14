@@ -5,10 +5,10 @@ import cv2
 import time
 import os
 import threading
-from utils.detection import YOLOTensorRT
-from utils.pipeline import ProcessingPipeline
-from utils.camera import CameraInterface
-from utils.detection.depth import DepthEstimator
+from detection import (YOLOTensorRT,
+                       ProcessingPipeline,
+                       CameraInterface,
+                       DepthEstimator)
 
 # Đường dẫn tới file model - sử dụng .pt thay vì .engine để tránh lỗi version
 ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
@@ -120,7 +120,9 @@ def demo_single_image():
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         cv2.imshow("Depth Information", depth_viz)
-    
+
+    print("\nẢnh đã được hiển thị, vui lòng nhấn phím bất kỳ để tiếp tục")
+    cv2.waitKey(0)
     # Lưu kết quả
     save_choice = input("\nBạn có muốn lưu kết quả? (y/n): ").lower()
     if save_choice in ['y', 'yes']:
@@ -136,7 +138,7 @@ def demo_single_image():
             cv2.imwrite(depth_output_path, depth_viz)
             print(f"Đã lưu kết quả depth tại: {depth_output_path}")
     
-    cv2.waitKey(0)
+    
     cv2.destroyAllWindows()
 
 def demo_batch_images():

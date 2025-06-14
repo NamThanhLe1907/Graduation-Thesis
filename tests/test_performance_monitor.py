@@ -3,7 +3,7 @@ import time
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from utils.performance_monitor import PerformanceMonitor
+from utility.performance_monitor import PerformanceMonitor
 
 class TestPerformanceMonitor(unittest.TestCase):
     def setUp(self):

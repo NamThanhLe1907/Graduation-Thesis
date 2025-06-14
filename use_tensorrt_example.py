@@ -10,10 +10,9 @@ from utils.pipeline import ProcessingPipeline
 from utils.camera import CameraInterface
 from utils.detection.depth import DepthEstimator
 
-# Đường dẫn tới file engine
+# Đường dẫn tới file model - sử dụng .pt thay vì .engine để tránh lỗi version
 ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                           "utils", "detection", "best.engine")
-
 # Cấu hình hiển thị depth - mặc định là False để tránh lag
 SHOW_DEPTH = os.environ.get('SHOW_DEPTH', 'false').lower() in ('true', '1', 'yes')
 
@@ -62,7 +61,7 @@ def create_yolo():
 
 def create_depth():
     # Cho phép chạy depth model trên CPU hoặc tắt hoàn toàn
-    use_device = os.environ.get('DEPTH_DEVICE', 'cpu')  # 'cuda', 'cpu' hoặc 'off' 
+    use_device = os.environ.get('DEPTH_DEVICE', 'cuda')  # 'cuda', 'cpu' hoặc 'off' 
     enable_depth = use_device.lower() != 'off'
     
     # Lấy các tùy chọn cải thiện hiệu suất

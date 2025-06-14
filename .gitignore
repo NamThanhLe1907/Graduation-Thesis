@@ -133,6 +133,7 @@ config.h.in
 */checkpoint
 */Depth_Anything
 env_activate_tensorrt/
-*.engine
 *.pt
 *.onnx
+*.engine
+best.engine

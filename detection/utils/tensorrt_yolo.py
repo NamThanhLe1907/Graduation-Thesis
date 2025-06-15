@@ -71,7 +71,7 @@ class YOLOTensorRT:
             raise ValueError("Khung hình đầu vào không hợp lệ")
         
         # Thực hiện suy luận bằng model YOLO OBB
-        results = self.model(frame, conf=self.conf_threshold, verbose=False, imgsz=(1280,1024), device=0)
+        results = self.model(frame, conf=self.conf_threshold, verbose=False, imgsz=(1280,720), device=0)
         
         # Trích xuất thông tin OBB từ kết quả
         result_obj = results[0]

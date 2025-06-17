@@ -9,7 +9,8 @@ import numpy as np
 from detection import (YOLOTensorRT,
                        ProcessingPipeline,
                        CameraInterface,
-                       DepthEstimator)
+                       DepthEstimator,
+                       ModuleDivision)
 
 # Đường dẫn tới file model - sử dụng .pt thay vì .engine để tránh lỗi version
 ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
@@ -124,18 +125,18 @@ def draw_depth_regions_with_rotated_boxes(image, depth_results):
         region_info = region_data.get('region_info', {})
         position = region_data.get('position', {})
         
-        # Chọn màu
-        color = colors[region_info.get('region_id', 0) % len(colors)]
+        # Chọn màu dựa trên region_id
+        region_id = region_info.get('region_id', 1)
+        color = colors[(region_id - 1) % len(colors)]
         
-        # Kiểm tra xem có corners trong region_data không
-        if 'corners' in region_data:
-            # Sử dụng corners nếu có
+        # Ưu tiên sử dụng corners nếu có (từ rotated boxes)
+        if 'corners' in region_data and region_data['corners']:
             corners = region_data['corners']
             pts = np.array(corners, np.int32)
             pts = pts.reshape((-1, 1, 2))
             cv2.polylines(result_image, [pts], True, color, 2)
             
-            # Tìm điểm để đặt text
+            # Tìm điểm để đặt text - sử dụng điểm có y nhỏ nhất
             corners_array = np.array(corners)
             min_y_idx = np.argmin(corners_array[:, 1])
             text_x, text_y = corners_array[min_y_idx]
@@ -149,14 +150,22 @@ def draw_depth_regions_with_rotated_boxes(image, depth_results):
                 cv2.rectangle(result_image, (x1, y1), (x2, y2), color, 2)
                 text_x, text_y = x1, y1 - 5
             else:
+                print(f"[WARNING] Region {region_id} không có corners hoặc bbox hợp lệ")
                 continue
         
         # Hiển thị thông tin region và depth
         pallet_id = region_info.get('pallet_id', 0)
-        region_id = region_info.get('region_id', 0)
         depth_z = position.get('z', 0.0)
         
         text = f"P{pallet_id}R{region_id}: {depth_z:.1f}m"
+        
+        # Vẽ background cho text để dễ đọc
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        cv2.rectangle(result_image, 
+                     (int(text_x) - 2, int(text_y) - text_size[1] - 2),
+                     (int(text_x) + text_size[0] + 2, int(text_y) + 2),
+                     (0, 0, 0), -1)
+        
         cv2.putText(result_image, text, (int(text_x), int(text_y)), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     
@@ -172,6 +181,10 @@ def demo_single_image():
     # Khởi tạo model Depth (sử dụng chung config với camera)
     depth_model = create_depth()
     print(f"Depth model enable: {depth_model.enable}")
+    
+    # Khởi tạo Module Division
+    divider = ModuleDivision()
+    print("Module Division đã được khởi tạo")
     
     # Hiển thị ảnh có sẵn từ folder images_pallets2
     print("\nẢnh có sẵn trong folder images_pallets2:")
@@ -226,11 +239,55 @@ def demo_single_image():
     
     yolo_time = time.time()
     
-    # Thực hiện depth estimation nếu được bật
+    # Chia pallet thành các vùng nhỏ và thực hiện depth estimation
     depth_results = None
-    if depth_model.enable:
-        print("Đang xử lý depth estimation...")
-        depth_results = depth_model.estimate_depth(frame, detections['bounding_boxes'])
+    region_depth_results = []
+    if depth_model.enable and len(detections['bounding_boxes']) > 0:
+        print("Đang chia pallet thành các vùng nhỏ...")
+        
+        # Chia pallet thành các vùng sử dụng Module Division
+        divided_result = divider.process_pallet_detections(detections, layer=1)
+        depth_regions = divider.prepare_for_depth_estimation(divided_result)
+        
+        print(f"Đã chia thành {len(depth_regions)} vùng")
+        
+        print("Đang xử lý depth estimation cho từng vùng...")
+        # Thực hiện depth estimation cho từng vùng
+        for i, region in enumerate(depth_regions):
+            bbox = region['bbox']
+            region_info = region['region_info']
+            
+            # Ước tính độ sâu cho bbox này
+            region_depth = depth_model.estimate_depth(frame, [bbox])
+            
+            # Tạo kết quả chi tiết cho region
+            if region_depth and len(region_depth) > 0:
+                depth_info = region_depth[0]  # Lấy kết quả đầu tiên
+                result = {
+                    'region_info': region_info,
+                    'bbox': bbox,
+                    'center': region['center'],
+                    'depth': depth_info,
+                    'position': {
+                        'x': region['center'][0],
+                        'y': region['center'][1], 
+                        'z': depth_info.get('mean_depth', 0.0) if isinstance(depth_info, dict) else 0.0
+                    }
+                }
+                
+                # Thêm corners nếu có (để vẽ rotated boxes)
+                if 'corners' in region:
+                    result['corners'] = region['corners']
+                
+                # Thêm corners gốc của pallet nếu có
+                if 'original_corners' in region:
+                    result['original_corners'] = region['original_corners']
+                
+                region_depth_results.append(result)
+        
+        # Giữ lại depth_results cũ để tương thích với code hiển thị
+        if region_depth_results:
+            depth_results = [r['depth'] for r in region_depth_results]
         
     depth_time = time.time()
     
@@ -242,10 +299,34 @@ def demo_single_image():
     print(f"Đã phát hiện {len(detections['bounding_boxes'])} đối tượng")
     
     # Hiển thị thông tin depth nếu có
-    if depth_results and len(depth_results) > 0:
-        print("Thông tin độ sâu:")
+    if region_depth_results and len(region_depth_results) > 0:
+        print("Thông tin độ sâu theo vùng:")
+        for i, result in enumerate(region_depth_results):
+            region_info = result['region_info']
+            depth_info = result['depth']
+            position = result['position']
+            
+            pallet_id = region_info.get('pallet_id', 1)
+            region_id = region_info.get('region_id', 1)
+            layer = region_info.get('layer', 1)
+            
+            if isinstance(depth_info, dict):
+                mean_depth = depth_info.get('mean_depth', 0.0)
+                min_depth = depth_info.get('min_depth', 0.0) 
+                max_depth = depth_info.get('max_depth', 0.0)
+            else:
+                mean_depth = min_depth = max_depth = 0.0
+            
+            print(f"  Pallet {pallet_id}, Vùng {region_id} (Layer {layer}): {mean_depth:.2f}m (min: {min_depth:.2f}m, max: {max_depth:.2f}m)")
+            print(f"    Tọa độ 3D: X={position['x']:.1f}, Y={position['y']:.1f}, Z={position['z']:.2f}m")
+    elif depth_results and len(depth_results) > 0:
+        # Fallback cho trường hợp không có region results
+        print("Thông tin độ sâu (không chia vùng):")
         for i, result in enumerate(depth_results):
-            print(f"  Đối tượng {i+1}: {result['mean_depth']:.2f}m (min: {result['min_depth']:.2f}m, max: {result['max_depth']:.2f}m)")
+            if isinstance(result, dict):
+                print(f"  Đối tượng {i+1}: {result.get('mean_depth', 0.0):.2f}m (min: {result.get('min_depth', 0.0):.2f}m, max: {result.get('max_depth', 0.0):.2f}m)")
+            else:
+                print(f"  Đối tượng {i+1}: Không có thông tin depth")
     
     # Hiển thị ảnh detection từ YOLO
     cv2.imshow("Kết quả phát hiện", detections["annotated_frame"])
@@ -254,6 +335,11 @@ def demo_single_image():
     if detections['corners'] or detections['bounding_boxes']:
         depth_viz = draw_rotated_boxes_with_depth(frame, detections, depth_results)
         cv2.imshow("Rotated Boxes với Depth Information", depth_viz)
+        
+        # Hiển thị depth regions nếu có chia vùng
+        if region_depth_results:
+            region_viz = draw_depth_regions_with_rotated_boxes(frame, region_depth_results)
+            cv2.imshow("Depth Regions (Module Division)", region_viz)
     
     print("\nẢnh đã được hiển thị, vui lòng nhấn phím bất kỳ để tiếp tục")
     cv2.waitKey(0)
@@ -272,6 +358,13 @@ def demo_single_image():
             depth_output_path = f"rotated_depth_{base_name}.jpg"
             cv2.imwrite(depth_output_path, depth_viz)
             print(f"Đã lưu kết quả rotated boxes với depth tại: {depth_output_path}")
+            
+            # Lưu depth regions nếu có chia vùng
+            if region_depth_results:
+                region_viz = draw_depth_regions_with_rotated_boxes(frame, region_depth_results)
+                region_output_path = f"depth_regions_{base_name}.jpg"
+                cv2.imwrite(region_output_path, region_viz)
+                print(f"Đã lưu kết quả depth regions tại: {region_output_path}")
     
     cv2.destroyAllWindows()
 
@@ -291,6 +384,10 @@ def demo_batch_images():
     depth_model = create_depth()
     print(f"Depth model enable: {depth_model.enable}")
     
+    # Khởi tạo Module Division
+    divider = ModuleDivision()
+    print("Module Division đã được khởi tạo")
+    
     # Lấy danh sách ảnh
     image_files = [f for f in os.listdir(pallets_folder) if f.endswith(('.jpg', '.jpeg', '.png'))]
     image_files.sort()
@@ -308,6 +405,10 @@ def demo_batch_images():
     # Tạo subfolder cho rotated boxes với depth
     rotated_folder = os.path.join(output_folder, "rotated_depth")
     os.makedirs(rotated_folder, exist_ok=True)
+    
+    # Tạo subfolder cho depth regions 
+    regions_folder = os.path.join(output_folder, "depth_regions")
+    os.makedirs(regions_folder, exist_ok=True)
     
     total_time = 0
     total_yolo_time = 0
@@ -334,11 +435,52 @@ def demo_batch_images():
         yolo_process_time = (yolo_time - start_time) * 1000
         total_yolo_time += yolo_process_time
         
-        # Thực hiện depth estimation nếu được bật
+        # Chia pallet thành các vùng nhỏ và thực hiện depth estimation
         depth_results = None
+        region_depth_results = []
         depth_process_time = 0
-        if depth_model.enable:
-            depth_results = depth_model.estimate_depth(frame, detections['bounding_boxes'])
+        if depth_model.enable and len(detections['bounding_boxes']) > 0:
+            # Chia pallet thành các vùng sử dụng Module Division
+            divided_result = divider.process_pallet_detections(detections, layer=1)
+            depth_regions = divider.prepare_for_depth_estimation(divided_result)
+            
+            # Thực hiện depth estimation cho từng vùng
+            for region in depth_regions:
+                bbox = region['bbox']
+                region_info = region['region_info']
+                
+                # Ước tính độ sâu cho bbox này
+                region_depth = depth_model.estimate_depth(frame, [bbox])
+                
+                # Tạo kết quả chi tiết cho region
+                if region_depth and len(region_depth) > 0:
+                    depth_info = region_depth[0]  # Lấy kết quả đầu tiên
+                    result = {
+                        'region_info': region_info,
+                        'bbox': bbox,
+                        'center': region['center'],
+                        'depth': depth_info,
+                        'position': {
+                            'x': region['center'][0],
+                            'y': region['center'][1], 
+                            'z': depth_info.get('mean_depth', 0.0) if isinstance(depth_info, dict) else 0.0
+                        }
+                    }
+                    
+                    # Thêm corners nếu có (để vẽ rotated boxes)
+                    if 'corners' in region:
+                        result['corners'] = region['corners']
+                    
+                    # Thêm corners gốc của pallet nếu có
+                    if 'original_corners' in region:
+                        result['original_corners'] = region['original_corners']
+                    
+                    region_depth_results.append(result)
+            
+            # Giữ lại depth_results cũ để tương thích với code hiển thị
+            if region_depth_results:
+                depth_results = [r['depth'] for r in region_depth_results]
+            
             depth_end_time = time.time()
             depth_process_time = (depth_end_time - yolo_time) * 1000
             total_depth_time += depth_process_time
@@ -358,11 +500,33 @@ def demo_batch_images():
             successful_detections += 1
         
         # Hiển thị thông tin depth nếu có
-        if depth_results and len(depth_results) > 0:
+        if region_depth_results and len(region_depth_results) > 0:
             successful_depth_detections += 1
-            print(f"  Thông tin độ sâu:")
+            print(f"  Thông tin độ sâu theo vùng ({len(region_depth_results)} vùng):")
+            for j, result in enumerate(region_depth_results):
+                region_info = result['region_info']
+                depth_info = result['depth']
+                position = result['position']
+                
+                pallet_id = region_info.get('pallet_id', 1)
+                region_id = region_info.get('region_id', 1)
+                layer = region_info.get('layer', 1)
+                
+                if isinstance(depth_info, dict):
+                    mean_depth = depth_info.get('mean_depth', 0.0)
+                else:
+                    mean_depth = 0.0
+                
+                print(f"    P{pallet_id}R{region_id}L{layer}: {mean_depth:.2f}m")
+        elif depth_results and len(depth_results) > 0:
+            # Fallback cho trường hợp không có region results
+            successful_depth_detections += 1
+            print(f"  Thông tin độ sâu (không chia vùng):")
             for j, result in enumerate(depth_results):
-                print(f"    Đối tượng {j+1}: {result['mean_depth']:.2f}m")
+                if isinstance(result, dict):
+                    print(f"    Đối tượng {j+1}: {result.get('mean_depth', 0.0):.2f}m")
+                else:
+                    print(f"    Đối tượng {j+1}: Không có thông tin depth")
         
         # Lưu kết quả detection
         base_name = os.path.splitext(img_file)[0]
@@ -376,6 +540,13 @@ def demo_batch_images():
             rotated_output_path = os.path.join(rotated_folder, f"rotated_depth_{base_name}.jpg")
             cv2.imwrite(rotated_output_path, depth_viz)
             print(f"  Đã lưu rotated boxes với depth: {rotated_output_path}")
+            
+            # Lưu depth regions nếu có chia vùng
+            if region_depth_results:
+                region_viz = draw_depth_regions_with_rotated_boxes(frame, region_depth_results)
+                region_output_path = os.path.join(regions_folder, f"depth_regions_{base_name}.jpg")
+                cv2.imwrite(region_output_path, region_viz)
+                print(f"  Đã lưu depth regions: {region_output_path}")
     
     # Thống kê tổng kết
     print(f"\n=== THỐNG KÊ TỔNG KẾT ===")
@@ -392,6 +563,7 @@ def demo_batch_images():
     print(f"Thời gian tổng trung bình: {total_time/len(image_files):.2f} ms/ảnh")
     print(f"Kết quả detection đã được lưu trong folder: {output_folder}")
     print(f"Kết quả rotated boxes với depth đã được lưu trong folder: {rotated_folder}")
+    print(f"Kết quả depth regions (Module Division) đã được lưu trong folder: {regions_folder}")
 
 # Di chuyển các hàm factory ra ngoài hàm demo_camera để có thể pickle
 def create_camera():
@@ -574,11 +746,14 @@ def demo_camera():
             print(f"Lỗi: {error}")
 
 if __name__ == "__main__":
-    print("Demo sử dụng model TensorRT với Rotated Bounding Boxes")
-    print("1. Thử nghiệm với ảnh đơn lẻ (có depth estimation với rotated boxes)")
-    print("2. Thử nghiệm với camera thời gian thực (có depth estimation với rotated boxes)")
-    print("3. Thử nghiệm với tất cả ảnh trong folder images_pallets2 (có depth estimation với rotated boxes)")
-    print("\nGhi chú: Tất cả các demo đều sử dụng chung cấu hình depth model!")
+    print("Demo sử dụng model TensorRT với Rotated Bounding Boxes và Module Division")
+    print("1. Thử nghiệm với ảnh đơn lẻ (có Module Division + depth estimation)")
+    print("2. Thử nghiệm với camera thời gian thực (có Module Division + depth estimation)")
+    print("3. Thử nghiệm với tất cả ảnh trong folder images_pallets2 (có Module Division + depth estimation)")
+    print("\nGhi chú:")
+    print("- Tất cả các demo đều sử dụng Module Division để chia pallet thành các vùng nhỏ")
+    print("- Depth estimation được thực hiện cho từng vùng riêng biệt")
+    print("- Tất cả các demo đều sử dụng chung cấu hình depth model")
     print("Bạn có thể đặt các biến môi trường để điều khiển depth model:")
     print("  DEPTH_DEVICE: Thiết bị chạy depth model")
     print("    - DEPTH_DEVICE=cuda   # Chạy trên GPU (mặc định nếu có CUDA)")

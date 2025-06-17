@@ -331,6 +331,15 @@ def _depth_estimation_worker(
                                         'z': depth_info.get('mean_depth', 0.0) if isinstance(depth_info, dict) else 0.0
                                     }
                                 }
+                                
+                                # Thêm corners nếu có (để vẽ rotated boxes)
+                                if 'corners' in region:
+                                    result['corners'] = region['corners']
+                                
+                                # Thêm corners gốc của pallet nếu có
+                                if 'original_corners' in region:
+                                    result['original_corners'] = region['original_corners']
+                                
                                 depth_results.append(result)
                         
                         # Gửi kết quả ra
@@ -734,7 +743,6 @@ class ProcessingPipeline:
 if __name__ == "__main__":
     # Đây là ví dụ sử dụng, cần import các module thực tế
     from detection.camera import CameraInterface
-    from detection.utils.yolo import YOLOInference
     from detection.utils.depth import DepthEstimator
     import cv2
     import time

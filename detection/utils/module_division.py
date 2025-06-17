@@ -94,6 +94,160 @@ class ModuleDivision:
         
         return regions
     
+    def divide_obb_module_1(self, pallet_corners: List[List[float]], layer: int = 1) -> List[Dict[str, Any]]:
+        """
+        Chia pallet OBB theo Module 1 trực tiếp dựa trên corners.
+        - Layer 1: Chia 3 phần bằng nhau theo chiều rộng (3 cột x 1 hàng)
+        - Layer 2: Chia 3 phần bằng nhau theo chiều dài (1 cột x 3 hàng)
+        
+        Args:
+            pallet_corners: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] corners của pallet OBB
+            layer: Lớp cần chia (1 hoặc 2)
+            
+        Returns:
+            List[Dict]: Danh sách các vùng con với corners chính xác
+        """
+        if layer not in [1, 2]:
+            raise ValueError("Layer phải là 1 hoặc 2")
+        
+        # Chuẩn hóa corners thành format numpy
+        corners_array = np.array(pallet_corners)
+        
+        # Tìm corners theo thứ tự: top-left, top-right, bottom-right, bottom-left
+        # Cách 1: Sắp xếp theo y trước, rồi theo x
+        sorted_by_y = corners_array[np.argsort(corners_array[:, 1])]
+        top_points = sorted_by_y[:2]  # 2 điểm trên cùng
+        bottom_points = sorted_by_y[2:]  # 2 điểm dưới cùng
+        
+        # Sắp xếp các điểm trên và dưới theo x
+        top_left, top_right = top_points[np.argsort(top_points[:, 0])]
+        bottom_left, bottom_right = bottom_points[np.argsort(bottom_points[:, 0])]
+        
+        regions = []
+        
+        if layer == 1:
+            # Layer 1: Chia 3 phần theo chiều rộng (3 cột x 1 hàng)
+            for i in range(3):
+                ratio_start = i / 3.0
+                ratio_end = (i + 1) / 3.0
+                
+                # Tính corners cho region này
+                region_corners = self._interpolate_obb_region(
+                    top_left, top_right, bottom_left, bottom_right,
+                    x_start=ratio_start, x_end=ratio_end,
+                    y_start=0.0, y_end=1.0
+                )
+                
+                # Tính bounding box và center từ corners
+                region_bbox = self._corners_to_bbox(region_corners)
+                region_center = self._corners_to_center(region_corners)
+                
+                regions.append({
+                    'region_id': i + 1,  # 1, 2, 3
+                    'bbox': region_bbox,
+                    'center': region_center,
+                    'corners': region_corners,
+                    'layer': layer,
+                    'module': 1
+                })
+        
+        elif layer == 2:
+            # Layer 2: Chia 3 phần theo chiều dài (1 cột x 3 hàng)
+            for i in range(3):
+                ratio_start = i / 3.0
+                ratio_end = (i + 1) / 3.0
+                
+                # Tính corners cho region này
+                region_corners = self._interpolate_obb_region(
+                    top_left, top_right, bottom_left, bottom_right,
+                    x_start=0.0, x_end=1.0,
+                    y_start=ratio_start, y_end=ratio_end
+                )
+                
+                # Tính bounding box và center từ corners
+                region_bbox = self._corners_to_bbox(region_corners)
+                region_center = self._corners_to_center(region_corners)
+                
+                regions.append({
+                    'region_id': i + 1,  # 1, 2, 3
+                    'bbox': region_bbox,
+                    'center': region_center,
+                    'corners': region_corners,
+                    'layer': layer,
+                    'module': 1
+                })
+        
+        return regions
+    
+    def _interpolate_obb_region(self, top_left: np.ndarray, top_right: np.ndarray, 
+                               bottom_left: np.ndarray, bottom_right: np.ndarray,
+                               x_start: float, x_end: float, y_start: float, y_end: float) -> List[List[float]]:
+        """
+        Tính corners của một region trong OBB bằng bilinear interpolation.
+        
+        Args:
+            top_left, top_right, bottom_left, bottom_right: Corners của OBB gốc
+            x_start, x_end: Tỷ lệ bắt đầu và kết thúc theo trục x (0.0 - 1.0)
+            y_start, y_end: Tỷ lệ bắt đầu và kết thúc theo trục y (0.0 - 1.0)
+            
+        Returns:
+            List[List[float]]: Corners của region [[x,y], [x,y], [x,y], [x,y]]
+        """
+        # Tính các điểm interpolation
+        # Top edge points
+        top_start = top_left + x_start * (top_right - top_left)
+        top_end = top_left + x_end * (top_right - top_left)
+        
+        # Bottom edge points
+        bottom_start = bottom_left + x_start * (bottom_right - bottom_left)
+        bottom_end = bottom_left + x_end * (bottom_right - bottom_left)
+        
+        # Region corners bằng interpolation theo y
+        region_top_left = top_start + y_start * (bottom_start - top_start)
+        region_top_right = top_end + y_start * (bottom_end - top_end)
+        region_bottom_right = top_end + y_end * (bottom_end - top_end)
+        region_bottom_left = top_start + y_end * (bottom_start - top_start)
+        
+        # Trả về theo format [[x,y], [x,y], [x,y], [x,y]]
+        return [
+            [float(region_top_left[0]), float(region_top_left[1])],      # top-left
+            [float(region_top_right[0]), float(region_top_right[1])],    # top-right
+            [float(region_bottom_right[0]), float(region_bottom_right[1])], # bottom-right
+            [float(region_bottom_left[0]), float(region_bottom_left[1])]   # bottom-left
+        ]
+    
+    def _corners_to_bbox(self, corners: List[List[float]]) -> List[float]:
+        """
+        Chuyển corners thành bounding box.
+        
+        Args:
+            corners: [[x,y], [x,y], [x,y], [x,y]]
+            
+        Returns:
+            List[float]: [x1, y1, x2, y2]
+        """
+        corners_array = np.array(corners)
+        min_x = np.min(corners_array[:, 0])
+        min_y = np.min(corners_array[:, 1])
+        max_x = np.max(corners_array[:, 0])
+        max_y = np.max(corners_array[:, 1])
+        return [float(min_x), float(min_y), float(max_x), float(max_y)]
+    
+    def _corners_to_center(self, corners: List[List[float]]) -> List[float]:
+        """
+        Tính center từ corners.
+        
+        Args:
+            corners: [[x,y], [x,y], [x,y], [x,y]]
+            
+        Returns:
+            List[float]: [center_x, center_y]
+        """
+        corners_array = np.array(corners)
+        center_x = np.mean(corners_array[:, 0])
+        center_y = np.mean(corners_array[:, 1])
+        return [float(center_x), float(center_y)]
+    
     def process_pallet_detections(self, detection_result: Dict[str, Any], 
                                  layer: int = 1) -> Dict[str, Any]:
         """
@@ -125,22 +279,20 @@ class ModuleDivision:
         }
         
         try:
-            # Lấy danh sách bounding boxes từ YOLO
+            # Ưu tiên sử dụng corners (rotated boxes) nếu có, fallback về bounding_boxes
+            corners_list = detection_result.get('corners', [])
             bounding_boxes = detection_result.get('bounding_boxes', [])
             
-            all_regions = []
-            
-            # Xử lý từng pallet được detect
-            for pallet_idx, pallet_bbox in enumerate(bounding_boxes):
-                # Chia pallet thành các vùng nhỏ
-                regions = self.divide_module_1(pallet_bbox, layer=layer)
-                
-                # Thêm thông tin pallet_id cho mỗi vùng
-                for region in regions:
-                    region['pallet_id'] = pallet_idx + 1
-                    region['global_region_id'] = len(all_regions) + 1
-                
-                all_regions.extend(regions)
+            # Kiểm tra xem có corners không
+            if corners_list and len(corners_list) > 0:
+                print(f"[ModuleDivision] Sử dụng {len(corners_list)} rotated bounding boxes (corners)")
+                all_regions = self._process_with_obb_corners(corners_list, layer)
+            elif bounding_boxes and len(bounding_boxes) > 0:
+                print(f"[ModuleDivision] Fallback: Sử dụng {len(bounding_boxes)} regular bounding boxes")
+                all_regions = self._process_with_bboxes(bounding_boxes, layer)
+            else:
+                print(f"[ModuleDivision] Không tìm thấy corners hoặc bounding_boxes")
+                all_regions = []
             
             result['divided_regions'] = all_regions
             result['total_regions'] = len(all_regions)
@@ -151,6 +303,75 @@ class ModuleDivision:
             print(f"Lỗi khi chia pallet: {e}")
         
         return result
+    
+    def _process_with_obb_corners(self, corners_list: List[List], layer: int) -> List[Dict[str, Any]]:
+        """
+        Xử lý detection với rotated bounding boxes (corners) - phiên bản mới chính xác.
+        
+        Args:
+            corners_list: Danh sách các corners từ YOLO
+            layer: Lớp cần chia
+            
+        Returns:
+            List[Dict]: Danh sách các vùng đã chia với corners chính xác
+        """
+        all_regions = []
+        
+        for pallet_idx, corners in enumerate(corners_list):
+            # Chia pallet OBB trực tiếp dựa trên corners
+            regions = self.divide_obb_module_1(corners, layer=layer)
+            
+            # Thêm thông tin pallet_id cho mỗi vùng
+            for region in regions:
+                region['pallet_id'] = pallet_idx + 1
+                region['global_region_id'] = len(all_regions) + 1
+                region['original_corners'] = corners  # Lưu corners gốc của pallet
+            
+            all_regions.extend(regions)
+        
+        return all_regions
+    
+    def _process_with_corners(self, corners_list: List[List], layer: int) -> List[Dict[str, Any]]:
+        """
+        Xử lý detection với rotated bounding boxes (corners) - phiên bản cũ (deprecated).
+        Được giữ lại để tương thích ngược.
+        
+        Args:
+            corners_list: Danh sách các corners từ YOLO
+            layer: Lớp cần chia
+            
+        Returns:
+            List[Dict]: Danh sách các vùng đã chia
+        """
+        print("[ModuleDivision] Sử dụng phương thức cũ _process_with_corners (deprecated)")
+        return self._process_with_obb_corners(corners_list, layer)
+    
+    def _process_with_bboxes(self, bounding_boxes: List[List], layer: int) -> List[Dict[str, Any]]:
+        """
+        Xử lý detection với regular bounding boxes (fallback).
+        
+        Args:
+            bounding_boxes: Danh sách các bounding boxes từ YOLO
+            layer: Lớp cần chia
+            
+        Returns:
+            List[Dict]: Danh sách các vùng đã chia
+        """
+        all_regions = []
+        
+        for pallet_idx, pallet_bbox in enumerate(bounding_boxes):
+            # Chia pallet thành các vùng nhỏ
+            regions = self.divide_module_1(pallet_bbox, layer=layer)
+            
+            # Thêm thông tin pallet_id cho mỗi vùng
+            for region in regions:
+                region['pallet_id'] = pallet_idx + 1
+                region['global_region_id'] = len(all_regions) + 1
+                # Không có corners cho regular bbox
+            
+            all_regions.extend(regions)
+        
+        return all_regions
     
     def prepare_for_depth_estimation(self, divided_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -165,7 +386,8 @@ class ModuleDivision:
                 {
                     'bbox': [x1, y1, x2, y2],
                     'center': [x, y],
-                    'region_info': Dict  # Thông tin chi tiết vùng
+                    'region_info': Dict,  # Thông tin chi tiết vùng
+                    'corners': List (optional) # Corners của region nếu có
                 }
             ]
         """
@@ -175,7 +397,7 @@ class ModuleDivision:
             regions = divided_result.get('divided_regions', [])
             
             for region in regions:
-                depth_regions.append({
+                depth_region = {
                     'bbox': region['bbox'],
                     'center': region['center'],
                     'region_info': {
@@ -185,7 +407,17 @@ class ModuleDivision:
                         'layer': region['layer'],
                         'module': region['module']
                     }
-                })
+                }
+                
+                # Thêm corners nếu có (cho rotated boxes)
+                if 'corners' in region:
+                    depth_region['corners'] = region['corners']
+                
+                # Thêm corners gốc của pallet nếu có
+                if 'original_corners' in region:
+                    depth_region['original_corners'] = region['original_corners']
+                
+                depth_regions.append(depth_region)
         
         except Exception as e:
             print(f"Lỗi khi chuẩn bị dữ liệu cho depth: {e}")

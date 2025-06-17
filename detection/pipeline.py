@@ -9,7 +9,6 @@ import threading
 import queue
 from typing import Any, Callable, Dict, List, Tuple, Optional, Union
 
-
 # ---------------------- CLASS QUẢN LÝ QUEUE ĐƠN GIẢN ----------------------
 class QueueManager:
     """Quản lý queue với cơ chế lấy giá trị mới nhất."""
@@ -185,9 +184,12 @@ def _yolo_detection_worker(
         print(f"[YOLO Process {mp.current_process().pid}] Đã khởi động")
         
         try:
+            # Import module division inside worker to avoid multiprocessing issues
+            from detection import ModuleDivision
+            
             yolo_model = yolo_factory()
             print(f"[YOLO Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(yolo_model).__name__}")
-            
+            divider = ModuleDivision()
             ready_event.set()
             
             detection_count = 0
@@ -198,6 +200,9 @@ def _yolo_detection_worker(
                     if frame is not None:
                         # Phát hiện đối tượng với YOLO
                         detections = yolo_model.detect(frame)
+                        divided_result = divider.process_pallet_detections(detections, layer = 1)
+
+                        depth_regions = divider.prepare_for_depth_estimation(divided_result)
                         
                         # Gửi kết quả detection ra ngoài
                         detection_queue.put((frame, detections))
@@ -205,7 +210,8 @@ def _yolo_detection_worker(
                         # Gửi thông tin cần thiết cho depth process (non-blocking)
                         depth_info = {
                             'frame': frame,
-                            'bounding_boxes': detections.get('bounding_boxes', [])
+                            'regions': depth_regions,
+                            'divided_result': divided_result,
                         }
                         
                         # Không chặn YOLO process nếu depth_info_queue đầy
@@ -299,10 +305,33 @@ def _depth_estimation_worker(
                     try:
                         depth_task = internal_queue.get(timeout=0.5)
                         frame = depth_task['frame']
-                        bounding_boxes = depth_task['bounding_boxes']
+                        regions = depth_task.get('regions', [])
+                        divided_result = depth_task.get('divided_result', {})
                         
-                        # Ước tính độ sâu cho các bounding box (tác vụ nặng)
-                        depth_results = depth_model.estimate_depth(frame, bounding_boxes)
+                        # Xử lý depth cho từng region
+                        depth_results = []
+                        for region in regions:
+                            bbox = region['bbox']
+                            region_info = region['region_info']
+                            
+                            # Ước tính độ sâu cho bbox này
+                            region_depth = depth_model.estimate_depth(frame, [bbox])
+                            
+                            # Tạo kết quả chi tiết cho region
+                            if region_depth and len(region_depth) > 0:
+                                depth_info = region_depth[0]  # Lấy kết quả đầu tiên
+                                result = {
+                                    'region_info': region_info,
+                                    'bbox': bbox,
+                                    'center': region['center'],
+                                    'depth': depth_info,
+                                    'position': {
+                                        'x': region['center'][0],
+                                        'y': region['center'][1], 
+                                        'z': depth_info.get('mean_depth', 0.0) if isinstance(depth_info, dict) else 0.0
+                                    }
+                                }
+                                depth_results.append(result)
                         
                         # Gửi kết quả ra
                         depth_result_queue.put((frame, depth_results))
@@ -312,7 +341,7 @@ def _depth_estimation_worker(
                         depth_count += 1
                         
                         if depth_count % 10 == 0:
-                            print(f"[Depth Thread] Đã xử lý {depth_count} depth estimates")
+                            print(f"[Depth Thread] Đã xử lý {depth_count} depth estimates cho {len(depth_results)} regions")
                     except queue.Empty:
                         time.sleep(0.01)
                         continue

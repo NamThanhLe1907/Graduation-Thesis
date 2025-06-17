@@ -421,15 +421,22 @@ def demo_camera():
                             # Tạo bản sao một lần và chỉ xử lý đơn giản
                             depth_viz = frame_depth.copy()
                             
-                            # Chỉ vẽ các bounding box đơn giản
-                            for i, box_data in enumerate(depth_results):
-                                bbox = box_data['bbox']
-                                mean_depth = box_data['mean_depth']
+                            # Chỉ vẽ các region với thông tin depth
+                            for i, region_data in enumerate(depth_results):
+                                bbox = region_data['bbox']
+                                region_info = region_data['region_info']
+                                position = region_data['position']
                                 x1, y1, x2, y2 = [int(v) for v in bbox]
                                 
-                                # Sử dụng màu đơn giản
-                                cv2.rectangle(depth_viz, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                cv2.putText(depth_viz, f"{mean_depth:.1f}m", (x1, y1 - 5), 
+                                # Sử dụng màu khác nhau cho mỗi region
+                                colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+                                color = colors[region_info['region_id'] % len(colors)]
+                                
+                                cv2.rectangle(depth_viz, (x1, y1), (x2, y2), color, 2)
+                                
+                                # Hiển thị thông tin region và depth
+                                text = f"P{region_info['pallet_id']}R{region_info['region_id']}: {position['z']:.1f}m"
+                                cv2.putText(depth_viz, text, (x1, y1 - 5), 
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                             
                             # Lưu lại để tái sử dụng

@@ -5,6 +5,7 @@ import cv2
 import time
 import os
 import threading
+import numpy as np
 from detection import (YOLOTensorRT,
                        ProcessingPipeline,
                        CameraInterface,
@@ -15,6 +16,151 @@ ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "utils", "detection", "best.engine")
 # Cấu hình hiển thị depth - mặc định là False để tránh lag
 SHOW_DEPTH = os.environ.get('SHOW_DEPTH', 'false').lower() in ('true', '1', 'yes')
+
+def draw_rotated_boxes_with_depth(image, detections, depth_results=None, thickness=2):
+    """
+    Vẽ rotated bounding boxes với thông tin depth lên ảnh.
+    
+    Args:
+        image: Ảnh để vẽ lên
+        detections: Kết quả detection từ YOLO (chứa corners)
+        depth_results: Kết quả depth estimation (optional)
+        thickness: Độ dày đường viền
+        
+    Returns:
+        np.ndarray: Ảnh đã được vẽ boxes
+    """
+    result_image = image.copy()
+    
+    # Màu sắc mặc định cho các boxes
+    default_colors = [
+        (0, 255, 0),    # Xanh lá
+        (255, 0, 0),    # Đỏ
+        (0, 0, 255),    # Xanh dương
+        (255, 255, 0),  # Vàng
+        (255, 0, 255),  # Tím
+        (0, 255, 255),  # Cyan
+    ]
+    
+    # Kiểm tra xem có corners không
+    if 'corners' in detections and detections['corners']:
+        # Sử dụng rotated bounding boxes (corners)
+        corners_list = detections['corners']
+        
+        for i, corners in enumerate(corners_list):
+            # Chọn màu
+            color = default_colors[i % len(default_colors)]
+            
+            # Vẽ rotated box bằng cv2.polylines
+            pts = np.array(corners, np.int32)
+            pts = pts.reshape((-1, 1, 2))
+            cv2.polylines(result_image, [pts], True, color, thickness)
+            
+            # Thêm thông tin depth nếu có
+            if depth_results and i < len(depth_results):
+                depth_info = depth_results[i]
+                mean_depth = depth_info.get('mean_depth', 0.0)
+                
+                # Tìm điểm trên cùng bên trái để đặt text
+                corners_array = np.array(corners)
+                min_y_idx = np.argmin(corners_array[:, 1])
+                text_x, text_y = corners_array[min_y_idx]
+                text_y = max(text_y - 5, 10)  # Đảm bảo không vẽ ra ngoài ảnh
+                
+                # Vẽ text depth
+                cv2.putText(result_image, f"{mean_depth:.1f}m", 
+                           (int(text_x), int(text_y)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Vẽ background cho text để dễ đọc
+                text_size = cv2.getTextSize(f"{mean_depth:.1f}m", cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                cv2.rectangle(result_image, 
+                             (int(text_x) - 2, int(text_y) - text_size[1] - 2),
+                             (int(text_x) + text_size[0] + 2, int(text_y) + 2),
+                             (0, 0, 0), -1)
+                cv2.putText(result_image, f"{mean_depth:.1f}m", 
+                           (int(text_x), int(text_y)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    elif 'bounding_boxes' in detections and detections['bounding_boxes']:
+        # Fallback: sử dụng regular bounding boxes nếu không có corners
+        print("[WARNING] Không có corners, sử dụng regular bounding boxes")
+        bboxes = detections['bounding_boxes']
+        
+        for i, bbox in enumerate(bboxes):
+            color = default_colors[i % len(default_colors)]
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            
+            # Vẽ regular box
+            cv2.rectangle(result_image, (x1, y1), (x2, y2), color, thickness)
+            
+            # Thêm thông tin depth nếu có
+            if depth_results and i < len(depth_results):
+                depth_info = depth_results[i]
+                mean_depth = depth_info.get('mean_depth', 0.0)
+                cv2.putText(result_image, f"{mean_depth:.1f}m", (x1, y1 - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    return result_image
+
+def draw_depth_regions_with_rotated_boxes(image, depth_results):
+    """
+    Vẽ depth regions với rotated bounding boxes (cho pipeline camera).
+    
+    Args:
+        image: Ảnh để vẽ lên
+        depth_results: Kết quả depth từ pipeline
+        
+    Returns:
+        np.ndarray: Ảnh đã được vẽ
+    """
+    result_image = image.copy()
+    
+    # Màu sắc cho các region
+    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+    
+    for i, region_data in enumerate(depth_results):
+        # Lấy thông tin từ depth result
+        region_info = region_data.get('region_info', {})
+        position = region_data.get('position', {})
+        
+        # Chọn màu
+        color = colors[region_info.get('region_id', 0) % len(colors)]
+        
+        # Kiểm tra xem có corners trong region_data không
+        if 'corners' in region_data:
+            # Sử dụng corners nếu có
+            corners = region_data['corners']
+            pts = np.array(corners, np.int32)
+            pts = pts.reshape((-1, 1, 2))
+            cv2.polylines(result_image, [pts], True, color, 2)
+            
+            # Tìm điểm để đặt text
+            corners_array = np.array(corners)
+            min_y_idx = np.argmin(corners_array[:, 1])
+            text_x, text_y = corners_array[min_y_idx]
+            text_y = max(text_y - 5, 10)
+            
+        else:
+            # Fallback: sử dụng bbox nếu không có corners
+            bbox = region_data.get('bbox', [])
+            if len(bbox) >= 4:
+                x1, y1, x2, y2 = [int(v) for v in bbox]
+                cv2.rectangle(result_image, (x1, y1), (x2, y2), color, 2)
+                text_x, text_y = x1, y1 - 5
+            else:
+                continue
+        
+        # Hiển thị thông tin region và depth
+        pallet_id = region_info.get('pallet_id', 0)
+        region_id = region_info.get('region_id', 0)
+        depth_z = position.get('z', 0.0)
+        
+        text = f"P{pallet_id}R{region_id}: {depth_z:.1f}m"
+        cv2.putText(result_image, text, (int(text_x), int(text_y)), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    return result_image
 
 def demo_single_image():
     """Thử nghiệm với một ảnh đơn lẻ"""
@@ -101,26 +247,14 @@ def demo_single_image():
         for i, result in enumerate(depth_results):
             print(f"  Đối tượng {i+1}: {result['mean_depth']:.2f}m (min: {result['min_depth']:.2f}m, max: {result['max_depth']:.2f}m)")
     
-    # Hiển thị ảnh detection
+    # Hiển thị ảnh detection từ YOLO
     cv2.imshow("Kết quả phát hiện", detections["annotated_frame"])
     
-    # Hiển thị depth map nếu có
-    depth_viz = None
-    if depth_model.enable and depth_results:
-        # Tạo depth visualization
-        depth_viz = frame.copy()
-        for result in depth_results:
-            bbox = result['bbox']
-            mean_depth = result['mean_depth']
-            x1, y1, x2, y2 = [int(v) for v in bbox]
-            
-            # Vẽ bounding box và thông tin depth
-            cv2.rectangle(depth_viz, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(depth_viz, f"{mean_depth:.1f}m", (x1, y1 - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        cv2.imshow("Depth Information", depth_viz)
-
+    # Hiển thị rotated boxes với depth information
+    if detections['corners'] or detections['bounding_boxes']:
+        depth_viz = draw_rotated_boxes_with_depth(frame, detections, depth_results)
+        cv2.imshow("Rotated Boxes với Depth Information", depth_viz)
+    
     print("\nẢnh đã được hiển thị, vui lòng nhấn phím bất kỳ để tiếp tục")
     cv2.waitKey(0)
     # Lưu kết quả
@@ -132,12 +266,12 @@ def demo_single_image():
         cv2.imwrite(detection_output_path, detections["annotated_frame"])
         print(f"Đã lưu kết quả detection tại: {detection_output_path}")
         
-        # Lưu depth visualization nếu có
-        if depth_viz is not None:
-            depth_output_path = f"depth_{base_name}.jpg"
+        # Lưu rotated boxes với depth nếu có
+        if detections['corners'] or detections['bounding_boxes']:
+            depth_viz = draw_rotated_boxes_with_depth(frame, detections, depth_results)
+            depth_output_path = f"rotated_depth_{base_name}.jpg"
             cv2.imwrite(depth_output_path, depth_viz)
-            print(f"Đã lưu kết quả depth tại: {depth_output_path}")
-    
+            print(f"Đã lưu kết quả rotated boxes với depth tại: {depth_output_path}")
     
     cv2.destroyAllWindows()
 
@@ -171,10 +305,9 @@ def demo_batch_images():
     output_folder = "batch_results"
     os.makedirs(output_folder, exist_ok=True)
     
-    # Tạo subfolder cho depth nếu depth được bật
-    if depth_model.enable:
-        depth_folder = os.path.join(output_folder, "depth")
-        os.makedirs(depth_folder, exist_ok=True)
+    # Tạo subfolder cho rotated boxes với depth
+    rotated_folder = os.path.join(output_folder, "rotated_depth")
+    os.makedirs(rotated_folder, exist_ok=True)
     
     total_time = 0
     total_yolo_time = 0
@@ -237,23 +370,12 @@ def demo_batch_images():
         cv2.imwrite(detection_output_path, detections["annotated_frame"])
         print(f"  Đã lưu detection: {detection_output_path}")
         
-        # Lưu kết quả depth nếu có
-        if depth_model.enable and depth_results:
-            # Tạo depth visualization
-            depth_viz = frame.copy()
-            for result in depth_results:
-                bbox = result['bbox']
-                mean_depth = result['mean_depth']
-                x1, y1, x2, y2 = [int(v) for v in bbox]
-                
-                # Vẽ bounding box và thông tin depth
-                cv2.rectangle(depth_viz, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(depth_viz, f"{mean_depth:.1f}m", (x1, y1 - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            depth_output_path = os.path.join(depth_folder, f"depth_{base_name}.jpg")
-            cv2.imwrite(depth_output_path, depth_viz)
-            print(f"  Đã lưu depth: {depth_output_path}")
+        # Lưu kết quả rotated boxes với depth
+        if detections['corners'] or detections['bounding_boxes']:
+            depth_viz = draw_rotated_boxes_with_depth(frame, detections, depth_results)
+            rotated_output_path = os.path.join(rotated_folder, f"rotated_depth_{base_name}.jpg")
+            cv2.imwrite(rotated_output_path, depth_viz)
+            print(f"  Đã lưu rotated boxes với depth: {rotated_output_path}")
     
     # Thống kê tổng kết
     print(f"\n=== THỐNG KÊ TỔNG KẾT ===")
@@ -269,9 +391,7 @@ def demo_batch_images():
     
     print(f"Thời gian tổng trung bình: {total_time/len(image_files):.2f} ms/ảnh")
     print(f"Kết quả detection đã được lưu trong folder: {output_folder}")
-    
-    if depth_model.enable:
-        print(f"Kết quả depth đã được lưu trong folder: {os.path.join(output_folder, 'depth')}")
+    print(f"Kết quả rotated boxes với depth đã được lưu trong folder: {rotated_folder}")
 
 # Di chuyển các hàm factory ra ngoài hàm demo_camera để có thể pickle
 def create_camera():
@@ -418,26 +538,8 @@ def demo_camera():
                         if depth_result:
                             frame_depth, depth_results = depth_result
                             
-                            # Tạo bản sao một lần và chỉ xử lý đơn giản
-                            depth_viz = frame_depth.copy()
-                            
-                            # Chỉ vẽ các region với thông tin depth
-                            for i, region_data in enumerate(depth_results):
-                                bbox = region_data['bbox']
-                                region_info = region_data['region_info']
-                                position = region_data['position']
-                                x1, y1, x2, y2 = [int(v) for v in bbox]
-                                
-                                # Sử dụng màu khác nhau cho mỗi region
-                                colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
-                                color = colors[region_info['region_id'] % len(colors)]
-                                
-                                cv2.rectangle(depth_viz, (x1, y1), (x2, y2), color, 2)
-                                
-                                # Hiển thị thông tin region và depth
-                                text = f"P{region_info['pallet_id']}R{region_info['region_id']}: {position['z']:.1f}m"
-                                cv2.putText(depth_viz, text, (x1, y1 - 5), 
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                            # Sử dụng helper function để vẽ rotated boxes với depth
+                            depth_viz = draw_depth_regions_with_rotated_boxes(frame_depth, depth_results)
                             
                             # Lưu lại để tái sử dụng
                             last_depth_viz = depth_viz
@@ -445,7 +547,7 @@ def demo_camera():
                     
                     # Hiển thị depth từ lần xử lý gần nhất
                     if last_depth_viz is not None:
-                        cv2.imshow("Depth", last_depth_viz)
+                        cv2.imshow("Rotated Depth Regions", last_depth_viz)
                 
                 # Xử lý phím nhấn
                 key = cv2.waitKey(1) & 0xFF
@@ -456,7 +558,7 @@ def demo_camera():
                     SHOW_DEPTH = not SHOW_DEPTH
                     print(f"Hiển thị depth map: {'BẬT' if SHOW_DEPTH else 'TẮT'}")
                     if not SHOW_DEPTH:
-                        cv2.destroyWindow("Depth")
+                        cv2.destroyWindow("Rotated Depth Regions")
                         
         except KeyboardInterrupt:
             print("Đã nhận tín hiệu ngắt từ bàn phím")
@@ -472,10 +574,10 @@ def demo_camera():
             print(f"Lỗi: {error}")
 
 if __name__ == "__main__":
-    print("Demo sử dụng model TensorRT")
-    print("1. Thử nghiệm với ảnh đơn lẻ (có depth estimation)")
-    print("2. Thử nghiệm với camera thời gian thực (có depth estimation)")
-    print("3. Thử nghiệm với tất cả ảnh trong folder images_pallets2 (có depth estimation)")
+    print("Demo sử dụng model TensorRT với Rotated Bounding Boxes")
+    print("1. Thử nghiệm với ảnh đơn lẻ (có depth estimation với rotated boxes)")
+    print("2. Thử nghiệm với camera thời gian thực (có depth estimation với rotated boxes)")
+    print("3. Thử nghiệm với tất cả ảnh trong folder images_pallets2 (có depth estimation với rotated boxes)")
     print("\nGhi chú: Tất cả các demo đều sử dụng chung cấu hình depth model!")
     print("Bạn có thể đặt các biến môi trường để điều khiển depth model:")
     print("  DEPTH_DEVICE: Thiết bị chạy depth model")

@@ -1,7 +1,7 @@
 """Cung cấp giao diện để tương tác với camera."""
 import cv2
 import numpy as np
-from typing import Tuple, Optional, Union
+from typing import Tuple, Union
 
 
 class CameraInterface:

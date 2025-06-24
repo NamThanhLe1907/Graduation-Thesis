@@ -441,7 +441,7 @@ def demo_batch_images():
         depth_process_time = 0
         if depth_model.enable and len(detections['bounding_boxes']) > 0:
             # Chia pallet thành các vùng sử dụng Module Division
-            divided_result = divider.process_pallet_detections(detections, layer=1)
+            divided_result = divider.process_pallet_detections(detections, layer=2)
             depth_regions = divider.prepare_for_depth_estimation(divided_result)
             
             # Thực hiện depth estimation cho từng vùng

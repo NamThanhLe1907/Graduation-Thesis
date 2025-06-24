@@ -3,7 +3,7 @@ Cung cấp công cụ theo dõi hiệu suất hệ thống.
 """
 import time
 import statistics
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 import threading
 import datetime
 

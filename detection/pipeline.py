@@ -3,11 +3,10 @@ Pipeline xử lý đa luồng cho camera, phát hiện đối tượng và ướ
 """
 import multiprocessing as mp
 import time
-import sys
 import traceback
 import threading
 import queue
-from typing import Any, Callable, Dict, List, Tuple, Optional, Union
+from typing import Any, Callable,  Optional
 
 # ---------------------- CLASS QUẢN LÝ QUEUE ĐƠN GIẢN ----------------------
 class QueueManager:

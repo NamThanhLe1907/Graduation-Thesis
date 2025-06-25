@@ -289,42 +289,42 @@ class ModuleDivision:
             classes = detection_result.get('classes', [])
             corners_list = detection_result.get('corners', [])
             bounding_boxes = detection_result.get('bounding_boxes', [])
-            print(f"[ModuleDivision DEBUG] Input:")
-            print(f"  - Classes: {classes}")
-            print(f"  - Target classes: {target_classes}")
-            print(f"  - Corners count: {len(corners_list)}")
-            print(f"  - Bboxes count: {len(bounding_boxes)}")            
+            # print(f"[ModuleDivision DEBUG] Input:")
+            # print(f"  - Classes: {classes}")
+            # print(f"  - Target classes: {target_classes}")
+            # print(f"  - Corners count: {len(corners_list)}")
+            # print(f"  - Bboxes count: {len(bounding_boxes)}")            
             #Filter chỉ lấy detection thuộc target_classes
             filtered_corners = []
             filtered_bboxes = []
 
             if classes:
                 for i, cls in enumerate(classes):
-                    print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
+                    # print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
                     if cls in target_classes:
-                        print(f"    -> ACCEPTED")
+                        # print(f"    -> ACCEPTED")
                         if corners_list and i < len(corners_list):
                             filtered_corners.append(corners_list[i])
                         if bounding_boxes and i < len(bounding_boxes):
                             filtered_bboxes.append(bounding_boxes[i])
-                    else:
-                        print(f"    -> REJECTED")
+                    # else:
+                    #     print(f"    -> REJECTED")
             else:
                 #Fallback: Nếu không có thông tin class, lấy tất cả
                 print(f"[ModuleDivision] Không có thông tin class, lấy tất cả")
                 filtered_corners = corners_list
                 filtered_bboxes = bounding_boxes
-            print(f"[ModuleDivision DEBUG] After filtering:")
-            print(f"  - Filtered corners: {len(filtered_corners)}")
-            print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
+            # print(f"[ModuleDivision DEBUG] After filtering:")
+            # print(f"  - Filtered corners: {len(filtered_corners)}")
+            # print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
             result['processing_info']['filtered_detection'] = len(filtered_corners) + len(filtered_bboxes)
             
             # Kiểm tra xem có corners không
             if filtered_corners and len(filtered_corners) > 0:
-                print(f"[ModuleDivision] Sử dụng {len(filtered_corners)} rotated bounding boxes (corners)")
+                # print(f"[ModuleDivision] Sử dụng {len(filtered_corners)} rotated bounding boxes (corners)")
                 all_regions = self._process_with_obb_corners(filtered_corners, layer)
             elif filtered_bboxes and len(filtered_bboxes) > 0:
-                print(f"[ModuleDivision] Fallback: Sử dụng {len(filtered_bboxes)} regular bounding boxes")
+                # print(f"[ModuleDivision] Fallback: Sử dụng {len(filtered_bboxes)} regular bounding boxes")
                 all_regions = self._process_with_bboxes(filtered_bboxes, layer)
             else:
                 print(f"[ModuleDivision] Không tìm thấy corners hoặc bounding_boxes")

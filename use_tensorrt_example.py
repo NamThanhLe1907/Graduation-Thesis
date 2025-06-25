@@ -318,7 +318,16 @@ def demo_single_image():
                 mean_depth = min_depth = max_depth = 0.0
             
             print(f"  Pallet {pallet_id}, Vùng {region_id} (Layer {layer}): {mean_depth:.2f}m (min: {min_depth:.2f}m, max: {max_depth:.2f}m)")
-            print(f"    Tọa độ 3D: X={position['x']:.1f}, Y={position['y']:.1f}, Z={position['z']:.2f}m")
+            print(f"    Tọa độ pixel: X={position['x']:.1f}, Y={position['y']:.1f}, Z={position['z']:.2f}m")
+            
+            # Hiển thị thông tin 3D nếu có camera calibration
+            if 'position_3d_camera' in result:
+                pos_3d = result['position_3d_camera']
+                print(f"    Tọa độ 3D (camera): X={pos_3d['X']:.3f}m, Y={pos_3d['Y']:.3f}m, Z={pos_3d['Z']:.3f}m")
+            
+            if 'real_size' in result:
+                real_size = result['real_size']
+                print(f"    Kích thước thực: {real_size['width_m']:.3f}m x {real_size['height_m']:.3f}m (diện tích: {real_size['area_m2']:.3f}m²)")
     elif depth_results and len(depth_results) > 0:
         # Fallback cho trường hợp không có region results
         print("Thông tin độ sâu (không chia vùng):")
@@ -572,11 +581,11 @@ def create_camera():
     return camera
 
 def create_yolo():
-    return YOLOTensorRT(engine_path=ENGINE_PATH, conf=0.25)
+    return YOLOTensorRT(engine_path=ENGINE_PATH, conf=0.55)
 
 def create_depth():
     # Cho phép chạy depth model trên CPU hoặc tắt hoàn toàn
-    use_device = os.environ.get('DEPTH_DEVICE', 'cuda')  # 'cuda', 'cpu' hoặc 'off' 
+    use_device = os.environ.get('DEPTH_DEVICE', 'off')  # 'cuda', 'cpu' hoặc 'off' 
     enable_depth = use_device.lower() != 'off'
     
     # Lấy loại model: regular hoặc metric
@@ -599,20 +608,27 @@ def create_depth():
             print(f"[Factory] Không thể phân tích DEPTH_SIZE: {input_size_str}, sử dụng kích thước gốc")
     
     # Bỏ qua frame
-    skip_frames_str = os.environ.get('DEPTH_SKIP', '20')
+    skip_frames_str = os.environ.get('DEPTH_SKIP', '50')
     try:
         skip_frames = int(skip_frames_str)
     except:
         skip_frames = 0
     
+    # Camera calibration settings
+    use_calibration = os.environ.get('USE_CAMERA_CALIBRATION', 'true').lower() in ('true', '1', 'yes')
+    calibration_file = os.environ.get('CAMERA_CALIBRATION_FILE', 'camera_params.npz')
+    
     if use_device.lower() == 'off':
         print(f"[Factory] Đã tắt depth model để tiết kiệm tài nguyên")
-        return DepthEstimator(device='cpu', enable=False)
+        return DepthEstimator(device='cpu', enable=False, use_camera_calibration=use_calibration, camera_calibration_file=calibration_file)
     
     print(f"[Factory] Khởi tạo depth model trên thiết bị: {use_device}")
     print(f"[Factory] Model type: {model_type}, Size: {model_size}")
     if model_type == 'metric':
         print(f"[Factory] Scene type: {scene_type}")
+    print(f"[Factory] Camera calibration: {'Bật' if use_calibration else 'Tắt'}")
+    if use_calibration:
+        print(f"[Factory] Calibration file: {calibration_file}")
     
     # Tạo DepthEstimator dựa trên loại model
     if model_type == 'metric':
@@ -622,7 +638,9 @@ def create_depth():
             device=use_device, 
             enable=enable_depth,
             input_size=input_size,
-            skip_frames=skip_frames
+            skip_frames=skip_frames,
+            use_camera_calibration=use_calibration,
+            camera_calibration_file=calibration_file
         )
     else:
         return DepthEstimator.create_regular(
@@ -630,7 +648,9 @@ def create_depth():
             device=use_device, 
             enable=enable_depth,
             input_size=input_size,
-            skip_frames=skip_frames
+            skip_frames=skip_frames,
+            use_camera_calibration=use_calibration,
+            camera_calibration_file=calibration_file
         )
 
 def demo_camera():
@@ -652,7 +672,7 @@ def demo_camera():
     last_depth_viz = None
     last_depth_time = 0
     skip_counter = 0
-    max_skip = 3  # Bỏ qua tối đa 3 frames khi xử lý không kịp
+    max_skip = 5  # Bỏ qua tối đa 3 frames khi xử lý không kịp
     
     # Khởi động pipeline
     if pipeline.start(timeout=60.0):
@@ -776,12 +796,19 @@ if __name__ == "__main__":
     print("\n  SHOW_DEPTH: Bật/tắt hiển thị depth map")
     print("    - SHOW_DEPTH=true     # Hiển thị depth map (có thể gây lag)")
     print("    - SHOW_DEPTH=false    # Tắt hiển thị depth map (mặc định)")
-    print("\n  Ví dụ Regular Depth:")
-    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=regular && set DEPTH_MODEL=small && python use_tensorrt_example.py")
-    print("\n  Ví dụ Metric Depth (Indoor):")
-    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=indoor && set DEPTH_MODEL=base && python use_tensorrt_example.py")
-    print("\n  Ví dụ Metric Depth (Outdoor):")
-    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=outdoor && set DEPTH_MODEL=small && python use_tensorrt_example.py")
+    print("\n  USE_CAMERA_CALIBRATION: Bật/tắt camera calibration")
+    print("    - USE_CAMERA_CALIBRATION=true    # Sử dụng camera calibration (mặc định)")
+    print("    - USE_CAMERA_CALIBRATION=false   # Tắt camera calibration")
+    print("\n  CAMERA_CALIBRATION_FILE: Đường dẫn file camera calibration")
+    print("    - CAMERA_CALIBRATION_FILE=camera_params.npz  # File calibration (mặc định)")
+    print("\n  Ví dụ Regular Depth với Camera Calibration:")
+    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=regular && set DEPTH_MODEL=small && set USE_CAMERA_CALIBRATION=true && python use_tensorrt_example.py")
+    print("\n  Ví dụ Metric Depth (Indoor) với Camera Calibration:")
+    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=indoor && set DEPTH_MODEL=base && set USE_CAMERA_CALIBRATION=true && python use_tensorrt_example.py")
+    print("\n  Ví dụ Metric Depth (Outdoor) không có Camera Calibration:")
+    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=outdoor && set DEPTH_MODEL=small && set USE_CAMERA_CALIBRATION=false && python use_tensorrt_example.py")
+    print("\n  Ví dụ với file calibration tùy chỉnh:")
+    print("    set USE_CAMERA_CALIBRATION=true && set CAMERA_CALIBRATION_FILE=my_camera_calib.npz && python use_tensorrt_example.py")
     print()
     
     choice = input("Chọn chế độ (1/2/3): ")

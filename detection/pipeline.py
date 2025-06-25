@@ -205,21 +205,21 @@ def _yolo_detection_worker(
                         # Phát hiện đối tượng với YOLO
                         detections = yolo_model.detect(frame)
 
-                        print(f"[DEBUG YOLO] Raw detections:")
-                        print(f"  - Classes: {detections.get('classes', [])}")
-                        print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
-                        print(f"  - Corners count: {len(detections.get('corners', []))}")
-                        print(f"  - Scores: {detections.get('scores', [])}")
+                        # print(f"[DEBUG YOLO] Raw detections:")
+                        # print(f"  - Classes: {detections.get('classes', [])}")
+                        # print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
+                        # print(f"  - Corners count: {len(detections.get('corners', []))}")
+                        # print(f"  - Scores: {detections.get('scores', [])}")
 
                         # DEBUG: Xác nhận target_classes trước khi gọi
                         target_classes_to_use = [1.0]
-                        print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
+                        # print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
                         
                         divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=target_classes_to_use)
-                        print(f"[PIPELINE DEBUG] Called with result: {divided_result.get('processing_info', {})}")
+                        # print(f"[PIPELINE DEBUG] Called with result: {divided_result.get('processing_info', {})}")
                         # THÊM DEBUG XEM KẾT QUẢ FILTERING
-                        print(f"[DEBUG MODULE] Processing info: {divided_result.get('processing_info', {})}")
-                        print(f"[DEBUG MODULE] Total regions: {divided_result.get('total_regions', 0)}")
+                        # print(f"[DEBUG MODULE] Processing info: {divided_result.get('processing_info', {})}")
+                        # print(f"[DEBUG MODULE] Total regions: {divided_result.get('total_regions', 0)}")
                         depth_regions = divider.prepare_for_depth_estimation(divided_result)
 
                         # Gửi kết quả detection ra ngoài
@@ -332,8 +332,11 @@ def _depth_estimation_worker(
                             bbox = region['bbox']
                             region_info = region['region_info']
                             
-                            # Ước tính độ sâu cho bbox này
-                            region_depth = depth_model.estimate_depth(frame, [bbox])
+                            # Ước tính độ sâu cho bbox này (sử dụng phiên bản có 3D nếu có camera calibration)
+                            if hasattr(depth_model, 'camera_calibration') and depth_model.camera_calibration is not None:
+                                region_depth = depth_model.estimate_depth_with_3d(frame, [bbox])
+                            else:
+                                region_depth = depth_model.estimate_depth(frame, [bbox])
                             
                             # Tạo kết quả chi tiết cho region
                             if region_depth and len(region_depth) > 0:
@@ -349,6 +352,13 @@ def _depth_estimation_worker(
                                         'z': depth_info.get('mean_depth', 0.0) if isinstance(depth_info, dict) else 0.0
                                     }
                                 }
+                                
+                                # Thêm thông tin 3D nếu có camera calibration
+                                if hasattr(depth_model, 'camera_calibration') and depth_model.camera_calibration is not None:
+                                    if 'center_3d' in depth_info:
+                                        result['position_3d_camera'] = depth_info['center_3d']
+                                    if 'real_size' in depth_info:
+                                        result['real_size'] = depth_info['real_size']
                                 
                                 # Thêm corners nếu có (để vẽ rotated boxes)
                                 if 'corners' in region:

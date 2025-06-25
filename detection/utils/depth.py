@@ -1,6 +1,7 @@
 """
 Cung cấp công cụ để ước tính độ sâu từ ảnh 2D bằng mô hình Depth Anything.
 Hỗ trợ cả Regular Depth và Metric Depth.
+Tích hợp camera calibration để cải thiện độ chính xác.
 """
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 import torch
@@ -9,6 +10,12 @@ import numpy as np
 import cv2
 from PIL import Image
 from typing import Tuple, Union, List, Dict, Any, Optional, Callable
+
+try:
+    from .camera_calibration import CameraCalibration
+except ImportError:
+    # Fallback nếu không import được
+    CameraCalibration = None
 
 
 class DepthEstimator:
@@ -46,6 +53,8 @@ class DepthEstimator:
         input_size: Optional[Tuple[int, int]] = (640, 640),
         skip_frames: int = 20,
         async_mode: bool = True,
+        use_camera_calibration: bool = True,
+        camera_calibration_file: str = "camera_params.npz",
     ) -> None:
         """
         Khởi tạo ước lượng độ sâu.
@@ -62,6 +71,8 @@ class DepthEstimator:
             input_size: Kích thước resize ảnh đầu vào (W, H), None để giữ nguyên kích thước
             skip_frames: Số frame bỏ qua giữa các lần xử lý (0 = xử lý mọi frame)
             async_mode: Kích hoạt chế độ bất đồng bộ (sử dụng threading)
+            use_camera_calibration: Sử dụng camera calibration để undistort ảnh và cải thiện độ chính xác
+            camera_calibration_file: Đường dẫn tới file camera calibration (.npz)
         """
         self.model_type = model_type.lower()
         self.model_size = model_size.lower()
@@ -84,6 +95,18 @@ class DepthEstimator:
         self.async_mode = async_mode
         self.processing = False
         
+        # Khởi tạo camera calibration
+        self.camera_calibration = None
+        if use_camera_calibration and CameraCalibration is not None:
+            try:
+                self.camera_calibration = CameraCalibration(camera_calibration_file)
+                print(f"[DepthEstimator] Camera calibration đã được tích hợp")
+            except Exception as e:
+                print(f"[DepthEstimator] Không thể tải camera calibration: {e}")
+                self.camera_calibration = None
+        elif use_camera_calibration and CameraCalibration is None:
+            print(f"[DepthEstimator] Camera calibration không khả dụng (module không được import)")
+        
         print(f"[DepthEstimator] Khởi tạo với dtype: {dtype}, device: {self.device}, enable: {enable}")
         print(f"[DepthEstimator] Model type: {self.model_type}")
         print(f"[DepthEstimator] Model: {model_name}")
@@ -94,6 +117,7 @@ class DepthEstimator:
         if skip_frames > 0:
             print(f"[DepthEstimator] Bỏ qua {skip_frames} frame giữa các lần xử lý")
         print(f"[DepthEstimator] Chế độ bất đồng bộ: {async_mode}")
+        print(f"[DepthEstimator] Camera calibration: {'Bật' if self.camera_calibration else 'Tắt'}")
         
         # Tải processor và model nếu được kích hoạt
         if self.enable:
@@ -198,8 +222,13 @@ class DepthEstimator:
         
         # Chuyển đổi từ numpy sang PIL Image nếu cần
         if isinstance(image, np.ndarray):
+            # Áp dụng camera calibration undistortion nếu có
+            processed_image = image
+            if self.camera_calibration is not None:
+                processed_image = self.camera_calibration.undistort_image(image)
+            
             # Giả định ảnh đầu vào là BGR (OpenCV format)
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb_image)
         else:
             pil_image = image
@@ -459,6 +488,67 @@ class DepthEstimator:
             })
             
         return results
+    
+    def estimate_depth_with_3d(self, frame: np.ndarray, bounding_boxes: List[Union[Dict, np.ndarray]]) -> List[Dict]:
+        """
+        Ước tính độ sâu của các bounding box và chuyển đổi sang tọa độ 3D.
+        
+        Args:
+            frame: Khung hình dạng numpy array (BGR)
+            bounding_boxes: Danh sách các bounding box
+                
+        Returns:
+            List[Dict]: Danh sách kết quả với thông tin 3D
+                {
+                    'bbox': Bounding box gốc,
+                    'mean_depth': Độ sâu trung bình,
+                    'min_depth': Độ sâu nhỏ nhất,
+                    'max_depth': Độ sâu lớn nhất,
+                    'center_3d': Tọa độ 3D của center (nếu có camera calibration),
+                    'real_size': Kích thước thực tế (nếu có camera calibration)
+                }
+        """
+        # Lấy kết quả depth thông thường
+        depth_results = self.estimate_depth(frame, bounding_boxes)
+        
+        # Nếu không có camera calibration, trả về kết quả thông thường
+        if self.camera_calibration is None:
+            return depth_results
+        
+        # Thêm thông tin 3D cho mỗi kết quả
+        enhanced_results = []
+        for result in depth_results:
+            enhanced_result = result.copy()
+            bbox = result['bbox']
+            mean_depth = result['mean_depth']
+            
+            if mean_depth > 0:
+                # Tính center của bounding box
+                if len(bbox) >= 4:
+                    x1, y1, x2, y2 = bbox[:4]
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    
+                    # Chuyển đổi center sang 3D
+                    X, Y, Z = self.camera_calibration.pixel_to_3d(center_x, center_y, mean_depth)
+                    enhanced_result['center_3d'] = {
+                        'X': X, 'Y': Y, 'Z': Z,
+                        'pixel_x': center_x, 'pixel_y': center_y
+                    }
+                    
+                    # Ước tính kích thước thực
+                    real_size = self.camera_calibration.estimate_real_size(bbox, mean_depth)
+                    enhanced_result['real_size'] = real_size
+                else:
+                    enhanced_result['center_3d'] = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
+                    enhanced_result['real_size'] = {'width_m': 0.0, 'height_m': 0.0, 'area_m2': 0.0}
+            else:
+                enhanced_result['center_3d'] = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
+                enhanced_result['real_size'] = {'width_m': 0.0, 'height_m': 0.0, 'area_m2': 0.0}
+            
+            enhanced_results.append(enhanced_result)
+        
+        return enhanced_results
 
 
 if __name__ == "__main__":

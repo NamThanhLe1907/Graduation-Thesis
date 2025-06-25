@@ -270,21 +270,21 @@ class YOLOTensorRT:
             # Kiểm tra xem đây là tensor (format mới) hay object (format cũ)
             if isinstance(obb, torch.Tensor):
                 # Format mới: OBB là tensor
-                print("[DEBUG] Sử dụng format mới của Ultralytics OBB (tensor)")
+                # print("[DEBUG] Sử dụng format mới của Ultralytics OBB (tensor)")
                 obb_data = self.extract_obb_data_new_format(obb)
                 detection_result.update(obb_data)
                 detection_result['format_type'] = 'new'
                 
             else:
                 # Format cũ: OBB là object với các attributes
-                print("[DEBUG] Sử dụng format cũ của Ultralytics OBB (object)")
+                # print("[DEBUG] Sử dụng format cũ của Ultralytics OBB (object)")
                 obb_data = self.extract_obb_data_legacy_format(obb)
                 detection_result.update(obb_data)
                 detection_result['format_type'] = 'legacy'
         
         # Fallback: Nếu không có OBB data, thử lấy từ boxes thông thường
         if not detection_result['bounding_boxes'] and hasattr(result_obj, 'boxes') and result_obj.boxes is not None:
-            print("[DEBUG] Fallback: Sử dụng detection boxes thông thường")
+            # print("[DEBUG] Fallback: Sử dụng detection boxes thông thường")
             boxes = result_obj.boxes
             
             if hasattr(boxes, 'xyxy'):
@@ -302,12 +302,12 @@ class YOLOTensorRT:
             detection_result['format_type'] = 'fallback'
         
         # Thông tin debug
-        print(f"[DEBUG] Detected {len(detection_result['bounding_boxes'])} objects")
-        print(f"[DEBUG] Format type: {detection_result['format_type']}")
-        if detection_result['obb_boxes']:
-            print(f"[DEBUG] OBB boxes available: {len(detection_result['obb_boxes'])}")
-        if detection_result['corners']:
-            print(f"[DEBUG] Corners available: {len(detection_result['corners'])}")
+        # print(f"[DEBUG] Detected {len(detection_result['bounding_boxes'])} objects")
+        # print(f"[DEBUG] Format type: {detection_result['format_type']}")
+        # if detection_result['obb_boxes']:
+            # print(f"[DEBUG] OBB boxes available: {len(detection_result['obb_boxes'])}")
+        # if detection_result['corners']:
+            # print(f"[DEBUG] Corners available: {len(detection_result['corners'])}")
         
         return detection_result
 

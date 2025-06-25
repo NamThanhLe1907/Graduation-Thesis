@@ -1,7 +1,7 @@
 """Cung cấp giao diện để tương tác với camera."""
 import cv2
 import numpy as np
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 
 
 class CameraInterface:
@@ -45,15 +45,11 @@ class CameraInterface:
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
             self.capture.set(cv2.CAP_PROP_FPS, self.fps)
             
-            # Apply optimized settings if enabled
+            # Apply optimized settings if enabled - matching optimized_realtime.py
             if self.use_optimized_settings:
                 self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 2)  # Giảm buffer để giảm lag
-                
-                # Tối ưu thêm cho Logitech cameras và các camera tương tự
-                self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Disable auto exposure
-                self.capture.set(cv2.CAP_PROP_EXPOSURE, -6)         # Fast exposure
-                self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)         # Disable autofocus
-                self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # MJPG for better performance
+                # Chỉ dùng MJPG như trong optimized_realtime.py
+                self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # MJPG for better quality
             
             # Kiểm tra thông số camera thực tế
             actual_width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -62,8 +58,8 @@ class CameraInterface:
             
             if self.use_optimized_settings:
                 actual_buffer = int(self.capture.get(cv2.CAP_PROP_BUFFERSIZE))
-                print(f"Camera initialized: {actual_width}x{actual_height} @ {actual_fps:.1f}FPS (Buffer: {actual_buffer})")
-                print("✅ Optimized camera settings applied")
+                print(f"✅ Camera setup: {actual_width}x{actual_height} @ {actual_fps:.1f}FPS (Buffer: {actual_buffer})")
+                print("✅ Optimized settings applied (MJPG only, no exposure/autofocus changes)")
             else:
                 print(f"Camera initialized: {actual_width}x{actual_height} @ {actual_fps:.1f}FPS")
                 print("📹 Standard camera settings")
@@ -119,18 +115,16 @@ class CameraInterface:
         self.use_optimized_settings = enabled
         
         if enabled:
-            # Apply optimized settings
+            # Apply optimized settings - matching optimized_realtime.py
             self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-            self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-            self.capture.set(cv2.CAP_PROP_EXPOSURE, -6)
-            self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+            # Chỉ dùng MJPG, không thay đổi exposure hay autofocus
             self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            print("✅ Optimized settings enabled")
+            print("✅ Optimized settings enabled (MJPG only)")
         else:
             # Restore default settings
             self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)  # Default buffer
-            self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)  # Enable auto exposure
-            self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 1)  # Enable autofocus
+            # Reset về FOURCC mặc định
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
             print("📹 Standard settings restored")
 
     def release(self) -> None:

@@ -585,7 +585,7 @@ def create_yolo():
 
 def create_depth():
     # Cho phép chạy depth model trên CPU hoặc tắt hoàn toàn
-    use_device = os.environ.get('DEPTH_DEVICE', 'off')  # 'cuda', 'cpu' hoặc 'off' 
+    use_device = os.environ.get('DEPTH_DEVICE', 'cuda')  # 'cuda', 'cpu' hoặc 'off' 
     enable_depth = use_device.lower() != 'off'
     
     # Lấy loại model: regular hoặc metric

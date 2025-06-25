@@ -469,7 +469,7 @@ class ProcessingPipeline:
         camera_factory: Callable[[], Any],
         yolo_factory: Callable[[], Any],
         depth_factory: Callable[[], Any],
-        max_queue_size: int = 10
+        max_queue_size: int =  1
     ):
         """
         Khởi tạo pipeline xử lý đa luồng.

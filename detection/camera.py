@@ -1,6 +1,7 @@
 """Cung cấp giao diện để tương tác với camera."""
 import cv2
 import numpy as np
+import time
 from typing import Tuple, Union, Optional
 
 
@@ -24,6 +25,13 @@ class CameraInterface:
         self.use_optimized_settings = use_optimized_settings
         self.capture = None
         self.is_initialized = False
+        
+        # FPS tracking variables
+        self.fps_counter = 0
+        self.fps_start_time = time.time()
+        self.current_fps = 0.0
+        self.last_fps_update = time.time()
+        self.fps_update_interval = 1.0  # Cập nhật FPS mỗi giây
 
     def initialize(self) -> None:
         """
@@ -85,7 +93,88 @@ class CameraInterface:
         ret, frame = self.capture.read()
         if not ret:
             raise RuntimeError("Không thể đọc khung hình từ camera")
+        
+        # Cập nhật FPS counter
+        self._update_fps()
+        
         return frame
+
+    def _update_fps(self) -> None:
+        """Cập nhật thông tin FPS."""
+        current_time = time.time()
+        self.fps_counter += 1
+        
+        # Cập nhật FPS mỗi giây
+        if current_time - self.last_fps_update >= self.fps_update_interval:
+            time_elapsed = current_time - self.last_fps_update
+            self.current_fps = self.fps_counter / time_elapsed
+            self.fps_counter = 0
+            self.last_fps_update = current_time
+
+    def get_fps(self) -> float:
+        """
+        Lấy FPS hiện tại.
+        
+        Returns:
+            float: FPS hiện tại
+        """
+        return self.current_fps
+
+    def draw_fps(self, frame: np.ndarray, position: Tuple[int, int] = (10, 30), 
+                 color: Tuple[int, int, int] = (0, 255, 0), font_scale: float = 1.0,
+                 show_target_fps: bool = True) -> np.ndarray:
+        """
+        Vẽ thông tin FPS lên frame.
+        
+        Args:
+            frame: Frame để vẽ FPS lên
+            position: Vị trí vẽ text (x, y)
+            color: Màu text (B, G, R)
+            font_scale: Kích thước font
+            show_target_fps: Có hiển thị target FPS không
+            
+        Returns:
+            np.ndarray: Frame đã được vẽ FPS
+        """
+        result_frame = frame.copy()
+        
+        # Text hiển thị FPS hiện tại
+        fps_text = f"FPS: {self.current_fps:.1f}"
+        
+        # Thêm target FPS nếu được yêu cầu
+        if show_target_fps:
+            fps_text += f" (Target: {self.fps})"
+        
+        # Vẽ background đen cho text để dễ đọc
+        text_size = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)[0]
+        cv2.rectangle(result_frame, 
+                     (position[0] - 5, position[1] - text_size[1] - 5),
+                     (position[0] + text_size[0] + 5, position[1] + 5),
+                     (0, 0, 0), -1)
+        
+        # Vẽ text FPS
+        cv2.putText(result_frame, fps_text, position, 
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
+        
+        return result_frame
+
+    def get_frame_with_fps(self, position: Tuple[int, int] = (10, 30), 
+                          color: Tuple[int, int, int] = (0, 255, 0), 
+                          font_scale: float = 1.0, show_target_fps: bool = True) -> np.ndarray:
+        """
+        Lấy frame đã được vẽ FPS.
+        
+        Args:
+            position: Vị trí vẽ text (x, y)
+            color: Màu text (B, G, R)
+            font_scale: Kích thước font
+            show_target_fps: Có hiển thị target FPS không
+            
+        Returns:
+            np.ndarray: Frame đã được vẽ FPS
+        """
+        frame = self.get_frame()
+        return self.draw_fps(frame, position, color, font_scale, show_target_fps)
 
     def get_resolution(self) -> Tuple[int, int]:
         """
@@ -138,12 +227,40 @@ class CameraInterface:
 if __name__ == "__main__":
     camera = CameraInterface()
     camera.initialize()
+    
+    print("Camera đang chạy với FPS tracking!")
+    print("Các phím tắt:")
+    print("  'q': Thoát")
+    print("  'f': Bật/tắt hiển thị FPS")
+    print("  's': In thông tin FPS ra console")
+    
+    show_fps = True
     try:
         while True:
-            frame = camera.get_frame()
-            cv2.imshow("Camera Feed", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if show_fps:
+                # Lấy frame với FPS được vẽ lên
+                frame = camera.get_frame_with_fps(
+                    position=(10, 30),
+                    color=(0, 255, 0),  # Xanh lá
+                    font_scale=0.8,
+                    show_target_fps=True
+                )
+            else:
+                # Lấy frame bình thường
+                frame = camera.get_frame()
+            
+            cv2.imshow("Camera Feed with FPS", frame)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
                 break
+            elif key == ord('f'):
+                show_fps = not show_fps
+                print(f"Hiển thị FPS: {'BẬT' if show_fps else 'TẮT'}")
+            elif key == ord('s'):
+                current_fps = camera.get_fps()
+                print(f"FPS hiện tại: {current_fps:.2f} (Target: {camera.fps})")
+                
     except KeyboardInterrupt:
         print("Đã dừng camera do nhận tín hiệu ngắt từ bàn phím")
     except Exception as e:

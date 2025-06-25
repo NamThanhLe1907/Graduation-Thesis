@@ -682,6 +682,7 @@ def demo_camera():
             # Vòng lặp hiển thị kết quả
             fps_counter = 0
             fps_time = time.time()
+            fps = 0.0  # Khởi tạo FPS
             
             while True:
                 start_loop = time.time()
@@ -714,13 +715,28 @@ def demo_camera():
                     
                     # Cập nhật thông tin thống kê
                     stats = pipeline.get_stats()
-                    cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    cv2.putText(frame, f"Objects: {len(detections.get('bounding_boxes', []))}", 
-                              (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
-                # Hiển thị kết quả detection - luôn hiển thị
-                cv2.imshow("Phát hiện đối tượng với TensorRT", detections["annotated_frame"])
+                # Vẽ FPS lên frame detection
+                display_frame = detections["annotated_frame"].copy()
+                
+                # Vẽ FPS với background đen để dễ đọc
+                fps_text = f"FPS: {fps:.1f}"
+                text_size = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+                cv2.rectangle(display_frame, 
+                             (10 - 5, 30 - text_size[1] - 5),
+                             (10 + text_size[0] + 5, 30 + 5),
+                             (0, 0, 0), -1)
+                cv2.putText(display_frame, fps_text, (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                # Thêm thông tin số objects
+                num_objects = len(detections.get('bounding_boxes', []))
+                objects_text = f"Objects: {num_objects}"
+                cv2.putText(display_frame, objects_text, (10, 70), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                # Hiển thị kết quả detection với FPS
+                cv2.imshow("Phát hiện đối tượng với TensorRT", display_frame)
                 
                 # Xử lý depth chỉ khi SHOW_DEPTH được bật
                 if SHOW_DEPTH:

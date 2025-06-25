@@ -249,7 +249,7 @@ class ModuleDivision:
         return [float(center_x), float(center_y)]
     
     def process_pallet_detections(self, detection_result: Dict[str, Any], 
-                                 layer: int = 1) -> Dict[str, Any]:
+                                 layer: int = 1, target_classes: Optional[List[float]] = None) -> Dict[str, Any]:
         """
         Xử lý kết quả detection từ YOLO và chia thành các vùng nhỏ.
         
@@ -266,6 +266,10 @@ class ModuleDivision:
                 'processing_info': Dict         # Thông tin xử lý
             }
         """
+        # Xử lý default value cho target_classes
+        if target_classes is None:
+            target_classes = [1.0]  # Default sẽ là [1.0] thay vì [0.0]
+        
         result = {
             'original_detection': detection_result,
             'divided_regions': [],
@@ -274,22 +278,54 @@ class ModuleDivision:
                 'layer': layer,
                 'module': 1,
                 'success': False,
-                'error': None
+                'error': None,
+                'target_classes': target_classes,
+                'filtered_detection': 0
             }
         }
         
         try:
             # Ưu tiên sử dụng corners (rotated boxes) nếu có, fallback về bounding_boxes
+            classes = detection_result.get('classes', [])
             corners_list = detection_result.get('corners', [])
             bounding_boxes = detection_result.get('bounding_boxes', [])
+            print(f"[ModuleDivision DEBUG] Input:")
+            print(f"  - Classes: {classes}")
+            print(f"  - Target classes: {target_classes}")
+            print(f"  - Corners count: {len(corners_list)}")
+            print(f"  - Bboxes count: {len(bounding_boxes)}")            
+            #Filter chỉ lấy detection thuộc target_classes
+            filtered_corners = []
+            filtered_bboxes = []
+
+            if classes:
+                for i, cls in enumerate(classes):
+                    print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
+                    if cls in target_classes:
+                        print(f"    -> ACCEPTED")
+                        if corners_list and i < len(corners_list):
+                            filtered_corners.append(corners_list[i])
+                        if bounding_boxes and i < len(bounding_boxes):
+                            filtered_bboxes.append(bounding_boxes[i])
+                    else:
+                        print(f"    -> REJECTED")
+            else:
+                #Fallback: Nếu không có thông tin class, lấy tất cả
+                print(f"[ModuleDivision] Không có thông tin class, lấy tất cả")
+                filtered_corners = corners_list
+                filtered_bboxes = bounding_boxes
+            print(f"[ModuleDivision DEBUG] After filtering:")
+            print(f"  - Filtered corners: {len(filtered_corners)}")
+            print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
+            result['processing_info']['filtered_detection'] = len(filtered_corners) + len(filtered_bboxes)
             
             # Kiểm tra xem có corners không
-            if corners_list and len(corners_list) > 0:
-                print(f"[ModuleDivision] Sử dụng {len(corners_list)} rotated bounding boxes (corners)")
-                all_regions = self._process_with_obb_corners(corners_list, layer)
-            elif bounding_boxes and len(bounding_boxes) > 0:
-                print(f"[ModuleDivision] Fallback: Sử dụng {len(bounding_boxes)} regular bounding boxes")
-                all_regions = self._process_with_bboxes(bounding_boxes, layer)
+            if filtered_corners and len(filtered_corners) > 0:
+                print(f"[ModuleDivision] Sử dụng {len(filtered_corners)} rotated bounding boxes (corners)")
+                all_regions = self._process_with_obb_corners(filtered_corners, layer)
+            elif filtered_bboxes and len(filtered_bboxes) > 0:
+                print(f"[ModuleDivision] Fallback: Sử dụng {len(filtered_bboxes)} regular bounding boxes")
+                all_regions = self._process_with_bboxes(filtered_bboxes, layer)
             else:
                 print(f"[ModuleDivision] Không tìm thấy corners hoặc bounding_boxes")
                 all_regions = []

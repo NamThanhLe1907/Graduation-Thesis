@@ -184,11 +184,16 @@ def _yolo_detection_worker(
         
         try:
             # Import module division inside worker to avoid multiprocessing issues
+            import importlib
+            import detection.utils.module_division
+            importlib.reload(detection.utils.module_division)  # Force reload để tránh cache
+            
             from detection import ModuleDivision
             
             yolo_model = yolo_factory()
             print(f"[YOLO Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(yolo_model).__name__}")
             divider = ModuleDivision()
+            print(f"[YOLO Process] ModuleDivision đã được tạo, testing default value...")
             ready_event.set()
             
             detection_count = 0
@@ -199,10 +204,24 @@ def _yolo_detection_worker(
                     if frame is not None:
                         # Phát hiện đối tượng với YOLO
                         detections = yolo_model.detect(frame)
-                        divided_result = divider.process_pallet_detections(detections, layer = 1)
 
-                        depth_regions = divider.prepare_for_depth_estimation(divided_result)
+                        print(f"[DEBUG YOLO] Raw detections:")
+                        print(f"  - Classes: {detections.get('classes', [])}")
+                        print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
+                        print(f"  - Corners count: {len(detections.get('corners', []))}")
+                        print(f"  - Scores: {detections.get('scores', [])}")
+
+                        # DEBUG: Xác nhận target_classes trước khi gọi
+                        target_classes_to_use = [1.0]
+                        print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
                         
+                        divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=target_classes_to_use)
+                        print(f"[PIPELINE DEBUG] Called with result: {divided_result.get('processing_info', {})}")
+                        # THÊM DEBUG XEM KẾT QUẢ FILTERING
+                        print(f"[DEBUG MODULE] Processing info: {divided_result.get('processing_info', {})}")
+                        print(f"[DEBUG MODULE] Total regions: {divided_result.get('total_regions', 0)}")
+                        depth_regions = divider.prepare_for_depth_estimation(divided_result)
+
                         # Gửi kết quả detection ra ngoài
                         detection_queue.put((frame, detections))
                         

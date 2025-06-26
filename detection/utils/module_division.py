@@ -4,6 +4,7 @@ Module chia pallet thành các vùng nhỏ hơn để depth estimation.
 """
 import numpy as np
 from typing import List, Tuple, Dict, Any, Optional
+import math
 
 
 class ModuleDivision:
@@ -11,10 +12,14 @@ class ModuleDivision:
     Lớp chia pallet thành các vùng con đơn giản.
     """
     
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         """Khởi tạo Module Division."""
-        pass
+        self.debug = debug
     
+
+    
+
+
     def divide_module_1(self, pallet_bbox: List[float], layer: int = 1) -> List[Dict[str, Any]]:
         """
         Chia pallet theo Module 1:
@@ -96,9 +101,9 @@ class ModuleDivision:
     
     def divide_obb_module_1(self, pallet_corners: List[List[float]], layer: int = 1) -> List[Dict[str, Any]]:
         """
-        Chia pallet OBB theo Module 1 trực tiếp dựa trên corners.
-        - Layer 1: Chia 3 phần bằng nhau theo chiều rộng (3 cột x 1 hàng)
-        - Layer 2: Chia 3 phần bằng nhau theo chiều dài (1 cột x 3 hàng)
+        Chia pallet OBB theo Module 1 với xác định hướng thực tế:
+        - Layer 1: Luôn chia theo CHIỀU DÀI thực tế của pallet (cạnh 12cm)
+        - Layer 2: Luôn chia theo CHIỀU NGANG thực tế của pallet (cạnh 10cm)
         
         Args:
             pallet_corners: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] corners của pallet OBB
@@ -113,8 +118,29 @@ class ModuleDivision:
         # Chuẩn hóa corners thành format numpy
         corners_array = np.array(pallet_corners)
         
+        # Tính 2 cạnh kề nhau để xác định cạnh dài/ngắn
+        edge1 = corners_array[1] - corners_array[0]  # Cạnh từ corner 0 -> 1
+        edge2 = corners_array[2] - corners_array[1]  # Cạnh từ corner 1 -> 2
+        
+        edge1_length = np.linalg.norm(edge1)
+        edge2_length = np.linalg.norm(edge2)
+        
+        # Xác định cạnh nào dài hơn (12cm vs 10cm)
+        if edge1_length > edge2_length:
+            # Edge1 là cạnh dài (12cm), Edge2 là cạnh ngắn (10cm)
+            long_edge_is_edge1 = True
+        else:
+            # Edge2 là cạnh dài (12cm), Edge1 là cạnh ngắn (10cm)
+            long_edge_is_edge1 = False
+        
+        if self.debug:
+            print(f"[ModuleDivision] Phân tích cạnh pallet:")
+            print(f"  Edge1 length: {edge1_length:.1f}px")
+            print(f"  Edge2 length: {edge2_length:.1f}px")
+            print(f"  Cạnh dài (12cm): {'Edge1' if long_edge_is_edge1 else 'Edge2'}")
+            print(f"  Cạnh ngắn (10cm): {'Edge2' if long_edge_is_edge1 else 'Edge1'}")
+        
         # Tìm corners theo thứ tự: top-left, top-right, bottom-right, bottom-left
-        # Cách 1: Sắp xếp theo y trước, rồi theo x
         sorted_by_y = corners_array[np.argsort(corners_array[:, 1])]
         top_points = sorted_by_y[:2]  # 2 điểm trên cùng
         bottom_points = sorted_by_y[2:]  # 2 điểm dưới cùng
@@ -126,56 +152,122 @@ class ModuleDivision:
         regions = []
         
         if layer == 1:
-            # Layer 1: Chia 3 phần theo chiều rộng (3 cột x 1 hàng)
-            for i in range(3):
-                ratio_start = i / 3.0
-                ratio_end = (i + 1) / 3.0
-                
-                # Tính corners cho region này
-                region_corners = self._interpolate_obb_region(
-                    top_left, top_right, bottom_left, bottom_right,
-                    x_start=ratio_start, x_end=ratio_end,
-                    y_start=0.0, y_end=1.0
-                )
-                
-                # Tính bounding box và center từ corners
-                region_bbox = self._corners_to_bbox(region_corners)
-                region_center = self._corners_to_center(region_corners)
-                
-                regions.append({
-                    'region_id': i + 1,  # 1, 2, 3
-                    'bbox': region_bbox,
-                    'center': region_center,
-                    'corners': region_corners,
-                    'layer': layer,
-                    'module': 1
-                })
+            # Layer 1: Chia theo CHIỀU DÀI thực tế (cạnh 12cm)
+            if long_edge_is_edge1:
+                # Cạnh dài là Edge1 (horizontal direction) -> chia theo X
+                if self.debug:
+                    print(f"[ModuleDivision] Layer 1: Chia theo cạnh dài (Edge1 - horizontal) -> chia theo X")
+                    
+                for i in range(3):
+                    ratio_start = i / 3.0
+                    ratio_end = (i + 1) / 3.0
+                    
+                    region_corners = self._interpolate_obb_region(
+                        top_left, top_right, bottom_left, bottom_right,
+                        x_start=ratio_start, x_end=ratio_end,
+                        y_start=0.0, y_end=1.0
+                    )
+                    
+                    region_bbox = self._corners_to_bbox(region_corners)
+                    region_center = self._corners_to_center(region_corners)
+                    
+                    regions.append({
+                        'region_id': i + 1,
+                        'bbox': region_bbox,
+                        'center': region_center,
+                        'corners': region_corners,
+                        'layer': layer,
+                        'module': 1,
+                        'division_direction': 'along_long_edge_X',
+                        'rule': 'layer1_along_12cm_edge'
+                    })
+            else:
+                # Cạnh dài là Edge2 (vertical direction) -> chia theo Y
+                if self.debug:
+                    print(f"[ModuleDivision] Layer 1: Chia theo cạnh dài (Edge2 - vertical) -> chia theo Y")
+                    
+                for i in range(3):
+                    ratio_start = i / 3.0
+                    ratio_end = (i + 1) / 3.0
+                    
+                    region_corners = self._interpolate_obb_region(
+                        top_left, top_right, bottom_left, bottom_right,
+                        x_start=0.0, x_end=1.0,
+                        y_start=ratio_start, y_end=ratio_end
+                    )
+                    
+                    region_bbox = self._corners_to_bbox(region_corners)
+                    region_center = self._corners_to_center(region_corners)
+                    
+                    regions.append({
+                        'region_id': i + 1,
+                        'bbox': region_bbox,
+                        'center': region_center,
+                        'corners': region_corners,
+                        'layer': layer,
+                        'module': 1,
+                        'division_direction': 'along_long_edge_Y',
+                        'rule': 'layer1_along_12cm_edge'
+                    })
         
         elif layer == 2:
-            # Layer 2: Chia 3 phần theo chiều dài (1 cột x 3 hàng)
-            for i in range(3):
-                ratio_start = i / 3.0
-                ratio_end = (i + 1) / 3.0
-                
-                # Tính corners cho region này
-                region_corners = self._interpolate_obb_region(
-                    top_left, top_right, bottom_left, bottom_right,
-                    x_start=0.0, x_end=1.0,
-                    y_start=ratio_start, y_end=ratio_end
-                )
-                
-                # Tính bounding box và center từ corners
-                region_bbox = self._corners_to_bbox(region_corners)
-                region_center = self._corners_to_center(region_corners)
-                
-                regions.append({
-                    'region_id': i + 1,  # 1, 2, 3
-                    'bbox': region_bbox,
-                    'center': region_center,
-                    'corners': region_corners,
-                    'layer': layer,
-                    'module': 1
-                })
+            # Layer 2: Chia theo CHIỀU NGANG thực tế (cạnh 10cm)
+            if not long_edge_is_edge1:
+                # Cạnh ngắn là Edge1 (horizontal direction) -> chia theo X
+                if self.debug:
+                    print(f"[ModuleDivision] Layer 2: Chia theo cạnh ngắn (Edge1 - horizontal) -> chia theo X")
+                    
+                for i in range(3):
+                    ratio_start = i / 3.0
+                    ratio_end = (i + 1) / 3.0
+                    
+                    region_corners = self._interpolate_obb_region(
+                        top_left, top_right, bottom_left, bottom_right,
+                        x_start=ratio_start, x_end=ratio_end,
+                        y_start=0.0, y_end=1.0
+                    )
+                    
+                    region_bbox = self._corners_to_bbox(region_corners)
+                    region_center = self._corners_to_center(region_corners)
+                    
+                    regions.append({
+                        'region_id': i + 1,
+                        'bbox': region_bbox,
+                        'center': region_center,
+                        'corners': region_corners,
+                        'layer': layer,
+                        'module': 1,
+                        'division_direction': 'along_short_edge_X',
+                        'rule': 'layer2_along_10cm_edge'
+                    })
+            else:
+                # Cạnh ngắn là Edge2 (vertical direction) -> chia theo Y
+                if self.debug:
+                    print(f"[ModuleDivision] Layer 2: Chia theo cạnh ngắn (Edge2 - vertical) -> chia theo Y")
+                    
+                for i in range(3):
+                    ratio_start = i / 3.0
+                    ratio_end = (i + 1) / 3.0
+                    
+                    region_corners = self._interpolate_obb_region(
+                        top_left, top_right, bottom_left, bottom_right,
+                        x_start=0.0, x_end=1.0,
+                        y_start=ratio_start, y_end=ratio_end
+                    )
+                    
+                    region_bbox = self._corners_to_bbox(region_corners)
+                    region_center = self._corners_to_center(region_corners)
+                    
+                    regions.append({
+                        'region_id': i + 1,
+                        'bbox': region_bbox,
+                        'center': region_center,
+                        'corners': region_corners,
+                        'layer': layer,
+                        'module': 1,
+                        'division_direction': 'along_short_edge_Y',
+                        'rule': 'layer2_along_10cm_edge'
+                    })
         
         return regions
     
@@ -268,7 +360,7 @@ class ModuleDivision:
         """
         # Xử lý default value cho target_classes
         if target_classes is None:
-            target_classes = [1.0]  # Default sẽ là [1.0] thay vì [0.0]
+            target_classes = [0.0, 1.0, 2.0]  # Tạm thời chấp nhận tất cả class để debug
         
         result = {
             'original_detection': detection_result,
@@ -289,34 +381,39 @@ class ModuleDivision:
             classes = detection_result.get('classes', [])
             corners_list = detection_result.get('corners', [])
             bounding_boxes = detection_result.get('bounding_boxes', [])
-            # print(f"[ModuleDivision DEBUG] Input:")
-            # print(f"  - Classes: {classes}")
-            # print(f"  - Target classes: {target_classes}")
-            # print(f"  - Corners count: {len(corners_list)}")
-            # print(f"  - Bboxes count: {len(bounding_boxes)}")            
+            if self.debug:
+                print(f"[ModuleDivision DEBUG] Input:")
+                print(f"  - Classes: {classes}")
+                print(f"  - Target classes: {target_classes}")
+                print(f"  - Corners count: {len(corners_list)}")
+                print(f"  - Bboxes count: {len(bounding_boxes)}")            
             #Filter chỉ lấy detection thuộc target_classes
             filtered_corners = []
             filtered_bboxes = []
 
             if classes:
                 for i, cls in enumerate(classes):
-                    # print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
+                    if self.debug:
+                        print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
                     if cls in target_classes:
-                        # print(f"    -> ACCEPTED")
+                        if self.debug:
+                            print(f"    -> ACCEPTED")
                         if corners_list and i < len(corners_list):
                             filtered_corners.append(corners_list[i])
                         if bounding_boxes and i < len(bounding_boxes):
                             filtered_bboxes.append(bounding_boxes[i])
-                    # else:
-                    #     print(f"    -> REJECTED")
+                    else:
+                        if self.debug:
+                            print(f"    -> REJECTED")
             else:
                 #Fallback: Nếu không có thông tin class, lấy tất cả
                 print(f"[ModuleDivision] Không có thông tin class, lấy tất cả")
                 filtered_corners = corners_list
                 filtered_bboxes = bounding_boxes
-            # print(f"[ModuleDivision DEBUG] After filtering:")
-            # print(f"  - Filtered corners: {len(filtered_corners)}")
-            # print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
+            if self.debug:
+                print(f"[ModuleDivision DEBUG] After filtering:")
+                print(f"  - Filtered corners: {len(filtered_corners)}")
+                print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
             result['processing_info']['filtered_detection'] = len(filtered_corners) + len(filtered_bboxes)
             
             # Kiểm tra xem có corners không

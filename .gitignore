@@ -138,3 +138,4 @@ env_activate_tensorrt/
 *.engine
 best.engine
 *.xml
+*.txt

@@ -205,15 +205,15 @@ def _yolo_detection_worker(
                         # Phát hiện đối tượng với YOLO
                         detections = yolo_model.detect(frame)
 
-                        # print(f"[DEBUG YOLO] Raw detections:")
-                        # print(f"  - Classes: {detections.get('classes', [])}")
-                        # print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
-                        # print(f"  - Corners count: {len(detections.get('corners', []))}")
-                        # print(f"  - Scores: {detections.get('scores', [])}")
+                        print(f"[DEBUG YOLO] Raw detections:")
+                        print(f"  - Classes: {detections.get('classes', [])}")
+                        print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
+                        print(f"  - Corners count: {len(detections.get('corners', []))}")
+                        print(f"  - Scores: {detections.get('scores', [])}")
 
-                        # DEBUG: Xác nhận target_classes trước khi gọi
-                        target_classes_to_use = [1.0]
-                        # print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
+                        # DEBUG: Xác nhận target_classes trước khi gọi - CHẤP NHẬN TẤT CẢ CLASSES
+                        target_classes_to_use = [2.0]  # None = chấp nhận tất cả classes
+                        print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
                         
                         divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=target_classes_to_use)
                         # print(f"[PIPELINE DEBUG] Called with result: {divided_result.get('processing_info', {})}")

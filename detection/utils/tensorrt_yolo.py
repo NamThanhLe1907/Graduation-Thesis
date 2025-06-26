@@ -260,6 +260,8 @@ class YOLOTensorRT:
             'corners': [],
             'scores': [],
             'classes': [],
+            'class_names': [],  # Thêm field class_names
+            'confidences': [],   # Thêm field confidences để tương thích
             'format_type': 'unknown'
         }
         
@@ -300,6 +302,24 @@ class YOLOTensorRT:
                 detection_result['classes'] = cls.tolist() if isinstance(cls, np.ndarray) else cls
                 
             detection_result['format_type'] = 'fallback'
+        
+        # Thêm mapping từ class ID sang class names
+        # Điều chỉnh theo model của bạn
+        class_mapping = {
+            0: "load",
+            1: "load_2",
+            2: "pallet"
+            # Thêm các class khác nếu có
+        }
+        
+        # Chuyển đổi class IDs sang class names
+        if detection_result['classes']:
+            detection_result['class_names'] = [
+                class_mapping.get(int(cls), f"class_{int(cls)}") 
+                for cls in detection_result['classes']
+            ]
+            # Copy scores sang confidences để tương thích
+            detection_result['confidences'] = detection_result['scores'].copy()
         
         # Thông tin debug
         # print(f"[DEBUG] Detected {len(detection_result['bounding_boxes'])} objects")

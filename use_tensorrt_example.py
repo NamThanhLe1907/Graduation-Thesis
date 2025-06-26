@@ -615,7 +615,7 @@ def create_depth():
         skip_frames = 0
     
     # Camera calibration settings
-    use_calibration = os.environ.get('USE_CAMERA_CALIBRATION', 'true').lower() in ('true', '1', 'yes')
+    use_calibration = os.environ.get('USE_CAMERA_CALIBRATION', 'True').lower() in ('true', '1', 'yes')
     calibration_file = os.environ.get('CAMERA_CALIBRATION_FILE', 'camera_params.npz')
     
     if use_device.lower() == 'off':

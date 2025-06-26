@@ -53,7 +53,7 @@ class DepthEstimator:
         input_size: Optional[Tuple[int, int]] = (640, 640),
         skip_frames: int = 20,
         async_mode: bool = True,
-        use_camera_calibration: bool = True,
+        use_camera_calibration: bool = False,
         camera_calibration_file: str = "camera_params.npz",
     ) -> None:
         """

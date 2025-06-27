@@ -23,7 +23,7 @@ class YOLOTensorRT:
     
     def __init__(self, 
                  engine_path: str = "best.engine", 
-                 conf: Optional[float] = 0.25, 
+                 conf: Optional[float] = 0.55, 
                  iou: float = 0.5):
         """
         Khởi tạo mô hình YOLO TensorRT.

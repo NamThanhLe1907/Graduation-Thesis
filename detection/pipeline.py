@@ -211,16 +211,55 @@ def _yolo_detection_worker(
                         print(f"  - Corners count: {len(detections.get('corners', []))}")
                         print(f"  - Scores: {detections.get('scores', [])}")
 
-                        # DEBUG: Xác nhận target_classes trước khi gọi - CHẤP NHẬN TẤT CẢ CLASSES
-                        target_classes_to_use = [2.0]  # None = chấp nhận tất cả classes
-                        print(f"[PIPELINE DEBUG] About to call process_pallet_detections with target_classes = {target_classes_to_use}")
+                        # LOGIC MỚI: Tách xử lý pallet và non-pallet
+                        pallet_classes = [2.0]  # Chỉ class 2.0 (pallet) mới chia regions
+                        print(f"[PIPELINE DEBUG] Tách xử lý: pallet_classes = {pallet_classes}")
                         
-                        divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=target_classes_to_use)
-                        # print(f"[PIPELINE DEBUG] Called with result: {divided_result.get('processing_info', {})}")
-                        # THÊM DEBUG XEM KẾT QUẢ FILTERING
-                        # print(f"[DEBUG MODULE] Processing info: {divided_result.get('processing_info', {})}")
-                        # print(f"[DEBUG MODULE] Total regions: {divided_result.get('total_regions', 0)}")
-                        depth_regions = divider.prepare_for_depth_estimation(divided_result)
+                        # 1. XỬ LÝ PALLET (class 2.0): Chia thành regions nhỏ
+                        divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=pallet_classes)
+                        pallet_depth_regions = divider.prepare_for_depth_estimation(divided_result)
+                        print(f"[PIPELINE DEBUG] Pallet regions: {len(pallet_depth_regions)}")
+                        
+                        # 2. XỬ LÝ NON-PALLET (class khác): Không chia regions, chỉ lấy depth cho toàn bộ bbox
+                        non_pallet_depth_regions = []
+                        if 'classes' in detections and detections['classes']:
+                            classes = detections['classes']
+                            bboxes = detections.get('bounding_boxes', [])
+                            corners_list = detections.get('corners', [])
+                            
+                            for i, cls in enumerate(classes):
+                                if cls not in pallet_classes:  # Không phải pallet
+                                    # Tạo depth region cho toàn bộ object (không chia nhỏ)
+                                    region_info = {
+                                        'region_id': 1,  # Chỉ có 1 region cho toàn bộ object
+                                        'pallet_id': 0,  # Không phải pallet
+                                        'global_region_id': len(pallet_depth_regions) + len(non_pallet_depth_regions) + 1,
+                                        'layer': 0,  # Không có layer
+                                        'module': 0,  # Không có module
+                                        'object_class': cls  # Lưu class gốc
+                                    }
+                                    
+                                    if i < len(bboxes):
+                                        bbox = bboxes[i]
+                                        center = [(bbox[0] + bbox[2])/2, (bbox[1] + bbox[3])/2]
+                                        
+                                        depth_region = {
+                                            'bbox': bbox,
+                                            'center': center,
+                                            'region_info': region_info
+                                        }
+                                        
+                                        # Thêm corners nếu có
+                                        if i < len(corners_list):
+                                            depth_region['corners'] = corners_list[i]
+                                        
+                                        non_pallet_depth_regions.append(depth_region)
+                        
+                        print(f"[PIPELINE DEBUG] Non-pallet regions: {len(non_pallet_depth_regions)}")
+                        
+                        # 3. MERGE CẢ 2 LOẠI REGIONS
+                        depth_regions = pallet_depth_regions + non_pallet_depth_regions
+                        print(f"[PIPELINE DEBUG] Total depth regions: {len(depth_regions)}")
 
                         # Gửi kết quả detection ra ngoài
                         detection_queue.put((frame, detections))
@@ -337,6 +376,21 @@ def _depth_estimation_worker(
                                 region_depth = depth_model.estimate_depth_with_3d(frame, [bbox])
                             else:
                                 region_depth = depth_model.estimate_depth(frame, [bbox])
+                            
+                            # DEBUG: In thông tin chi tiết về depth
+                            if region_depth and len(region_depth) > 0:
+                                depth_info = region_depth[0]
+                                print(f"[DEPTH DEBUG] Region {region_info.get('region_id', '?')} (Pallet {region_info.get('pallet_id', '?')}):")
+                                if isinstance(depth_info, dict):
+                                    print(f"  - Mean depth: {depth_info.get('mean_depth', 0.0):.3f}m")
+                                    print(f"  - Min depth: {depth_info.get('min_depth', 0.0):.3f}m") 
+                                    print(f"  - Max depth: {depth_info.get('max_depth', 0.0):.3f}m")
+                                    print(f"  - Std depth: {depth_info.get('std_depth', 0.0):.3f}m")
+                                    if 'center_3d' in depth_info:
+                                        pos_3d = depth_info['center_3d']
+                                        print(f"  - 3D position: X={pos_3d.get('X', 0):.3f}m, Y={pos_3d.get('Y', 0):.3f}m, Z={pos_3d.get('Z', 0):.3f}m")
+                                else:
+                                    print(f"  - Depth value: {depth_info}")
                             
                             # Tạo kết quả chi tiết cho region
                             if region_depth and len(region_depth) > 0:
@@ -469,7 +523,7 @@ class ProcessingPipeline:
         camera_factory: Callable[[], Any],
         yolo_factory: Callable[[], Any],
         depth_factory: Callable[[], Any],
-        max_queue_size: int =  1
+        max_queue_size: int =  3
     ):
         """
         Khởi tạo pipeline xử lý đa luồng.

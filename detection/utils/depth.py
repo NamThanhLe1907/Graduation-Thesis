@@ -48,7 +48,7 @@ class DepthEstimator:
         scene_type: str = "indoor",   # "indoor" hoặc "outdoor" (chỉ cho metric)
         device: Union[str, torch.device, None] = None,
         fp16: bool = True,
-        scale_factor: float = 0.35,
+        scale_factor: float = 0.425,
         enable: bool = True,
         input_size: Optional[Tuple[int, int]] = (640, 640),
         skip_frames: int = 20,

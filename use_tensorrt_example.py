@@ -107,6 +107,7 @@ def draw_rotated_boxes_with_depth(image, detections, depth_results=None, thickne
 def draw_depth_regions_with_rotated_boxes(image, depth_results):
     """
     Vẽ depth regions với rotated bounding boxes (cho pipeline camera).
+    Phân biệt pallet regions và non-pallet objects.
     
     Args:
         image: Ảnh để vẽ lên
@@ -118,23 +119,34 @@ def draw_depth_regions_with_rotated_boxes(image, depth_results):
     result_image = image.copy()
     
     # Màu sắc cho các region
-    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+    pallet_colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]  # Xanh, đỏ, xanh dương cho pallet regions
+    non_pallet_color = (255, 255, 0)  # Vàng cho non-pallet objects
     
     for i, region_data in enumerate(depth_results):
         # Lấy thông tin từ depth result
         region_info = region_data.get('region_info', {})
         position = region_data.get('position', {})
         
-        # Chọn màu dựa trên region_id
-        region_id = region_info.get('region_id', 1)
-        color = colors[(region_id - 1) % len(colors)]
+        # Phân biệt pallet và non-pallet
+        pallet_id = region_info.get('pallet_id', 0)
+        is_pallet = pallet_id > 0
+        
+        if is_pallet:
+            # Pallet: Chọn màu dựa trên region_id
+            region_id = region_info.get('region_id', 1)
+            color = pallet_colors[(region_id - 1) % len(pallet_colors)]
+            thickness = 2
+        else:
+            # Non-pallet: Sử dụng màu vàng, đường viền dày hơn
+            color = non_pallet_color
+            thickness = 3
         
         # Ưu tiên sử dụng corners nếu có (từ rotated boxes)
         if 'corners' in region_data and region_data['corners']:
             corners = region_data['corners']
             pts = np.array(corners, np.int32)
             pts = pts.reshape((-1, 1, 2))
-            cv2.polylines(result_image, [pts], True, color, 2)
+            cv2.polylines(result_image, [pts], True, color, thickness)
             
             # Tìm điểm để đặt text - sử dụng điểm có y nhỏ nhất
             corners_array = np.array(corners)
@@ -147,17 +159,23 @@ def draw_depth_regions_with_rotated_boxes(image, depth_results):
             bbox = region_data.get('bbox', [])
             if len(bbox) >= 4:
                 x1, y1, x2, y2 = [int(v) for v in bbox]
-                cv2.rectangle(result_image, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(result_image, (x1, y1), (x2, y2), color, thickness)
                 text_x, text_y = x1, y1 - 5
             else:
-                print(f"[WARNING] Region {region_id} không có corners hoặc bbox hợp lệ")
+                print(f"[WARNING] Region không có corners hoặc bbox hợp lệ")
                 continue
         
         # Hiển thị thông tin region và depth
-        pallet_id = region_info.get('pallet_id', 0)
         depth_z = position.get('z', 0.0)
         
-        text = f"P{pallet_id}R{region_id}: {depth_z:.1f}m"
+        if is_pallet:
+            # Pallet: hiển thị thông tin region
+            region_id = region_info.get('region_id', 1)
+            text = f"P{pallet_id}R{region_id}: {depth_z:.1f}m"
+        else:
+            # Non-pallet: hiển thị class
+            object_class = region_info.get('object_class', 'Unknown')
+            text = f"C{object_class}: {depth_z:.1f}m"
         
         # Vẽ background cho text để dễ đọc
         text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]

@@ -31,16 +31,7 @@ class ModuleDivision:
             layer: Lớp cần chia (1 hoặc 2)
             
         Returns:
-            List[Dict]: Danh sách các vùng con với thông tin tọa độ
-            [
-                {
-                    'region_id': int,           # ID của vùng (1, 2, 3)
-                    'bbox': [x1, y1, x2, y2],   # Tọa độ vùng
-                    'center': [x, y],           # Tâm vùng (để depth estimation)
-                    'layer': int,               # Lớp hiện tại
-                    'module': int               # Module ID
-                }
-            ]
+            List[Dict]: Danh sách các vùng con với thông tin tọa độ và orientation
         """
         if layer not in [1, 2]:
             raise ValueError("Layer phải là 1 hoặc 2")
@@ -48,6 +39,9 @@ class ModuleDivision:
         x1, y1, x2, y2 = pallet_bbox
         width = x2 - x1
         height = y2 - y1
+        
+        # Đối với regular bbox, orientation luôn là 0° (không xoay)
+        pallet_orientation = 0.0
         
         regions = []
         
@@ -71,7 +65,9 @@ class ModuleDivision:
                     'bbox': [region_x1, region_y1, region_x2, region_y2],
                     'center': [center_x, center_y],
                     'layer': layer,
-                    'module': 1
+                    'module': 1,
+                    'orientation': pallet_orientation,  # Regular bbox có orientation = 0°
+                    'pallet_orientation': pallet_orientation
                 })
         
         elif layer == 2:
@@ -94,7 +90,9 @@ class ModuleDivision:
                     'bbox': [region_x1, region_y1, region_x2, region_y2],
                     'center': [center_x, center_y],
                     'layer': layer,
-                    'module': 1
+                    'module': 1,
+                    'orientation': pallet_orientation,  # Regular bbox có orientation = 0°
+                    'pallet_orientation': pallet_orientation
                 })
         
         return regions
@@ -110,13 +108,16 @@ class ModuleDivision:
             layer: Lớp cần chia (1 hoặc 2)
             
         Returns:
-            List[Dict]: Danh sách các vùng con với corners chính xác
+            List[Dict]: Danh sách các vùng con với corners chính xác và orientation
         """
         if layer not in [1, 2]:
             raise ValueError("Layer phải là 1 hoặc 2")
         
         # Chuẩn hóa corners thành format numpy
         corners_array = np.array(pallet_corners)
+        
+        # Tính orientation của pallet gốc
+        pallet_orientation = self._calculate_pallet_orientation(pallet_corners)
         
         # Tính 2 cạnh kề nhau để xác định cạnh dài/ngắn
         edge1 = corners_array[1] - corners_array[0]  # Cạnh từ corner 0 -> 1
@@ -134,7 +135,8 @@ class ModuleDivision:
             long_edge_is_edge1 = False
         
         if self.debug:
-            print(f"[ModuleDivision] Phân tích cạnh pallet:")
+            print(f"[ModuleDivision] Phân tích pallet:")
+            print(f"  Pallet orientation: {pallet_orientation:.1f}°")
             print(f"  Edge1 length: {edge1_length:.1f}px")
             print(f"  Edge2 length: {edge2_length:.1f}px")
             print(f"  Cạnh dài (12cm): {'Edge1' if long_edge_is_edge1 else 'Edge2'}")
@@ -179,7 +181,9 @@ class ModuleDivision:
                         'layer': layer,
                         'module': 1,
                         'division_direction': 'along_long_edge_X',
-                        'rule': 'layer1_along_12cm_edge'
+                        'rule': 'layer1_along_12cm_edge',
+                        'orientation': pallet_orientation,  # Regions kế thừa orientation từ pallet gốc
+                        'pallet_orientation': pallet_orientation
                     })
             else:
                 # Cạnh dài là Edge2 (vertical direction) -> chia theo Y
@@ -207,7 +211,9 @@ class ModuleDivision:
                         'layer': layer,
                         'module': 1,
                         'division_direction': 'along_long_edge_Y',
-                        'rule': 'layer1_along_12cm_edge'
+                        'rule': 'layer1_along_12cm_edge',
+                        'orientation': pallet_orientation,  # Regions kế thừa orientation từ pallet gốc
+                        'pallet_orientation': pallet_orientation
                     })
         
         elif layer == 2:
@@ -238,7 +244,9 @@ class ModuleDivision:
                         'layer': layer,
                         'module': 1,
                         'division_direction': 'along_short_edge_X',
-                        'rule': 'layer2_along_10cm_edge'
+                        'rule': 'layer2_along_10cm_edge',
+                        'orientation': pallet_orientation,  # Regions kế thừa orientation từ pallet gốc
+                        'pallet_orientation': pallet_orientation
                     })
             else:
                 # Cạnh ngắn là Edge2 (vertical direction) -> chia theo Y
@@ -266,10 +274,55 @@ class ModuleDivision:
                         'layer': layer,
                         'module': 1,
                         'division_direction': 'along_short_edge_Y',
-                        'rule': 'layer2_along_10cm_edge'
+                        'rule': 'layer2_along_10cm_edge',
+                        'orientation': pallet_orientation,  # Regions kế thừa orientation từ pallet gốc
+                        'pallet_orientation': pallet_orientation
                     })
         
         return regions
+    
+    def _calculate_pallet_orientation(self, pallet_corners: List[List[float]]) -> float:
+        """
+        Tính orientation (góc xoay) của pallet dựa trên corners.
+        
+        Args:
+            pallet_corners: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] corners của pallet OBB
+            
+        Returns:
+            float: Góc orientation của pallet (degrees) theo hệ tọa độ custom
+        """
+        corners_array = np.array(pallet_corners)
+        
+        # Tính 2 cạnh kề nhau để xác định cạnh dài (trục chính)
+        edge1 = corners_array[1] - corners_array[0]  # Cạnh từ corner 0 -> 1
+        edge2 = corners_array[2] - corners_array[1]  # Cạnh từ corner 1 -> 2
+        
+        edge1_length = np.linalg.norm(edge1)
+        edge2_length = np.linalg.norm(edge2)
+        
+        # Chọn cạnh dài làm trục chính (major axis)
+        if edge1_length > edge2_length:
+            major_axis_vector = edge1
+        else:
+            major_axis_vector = edge2
+        
+        # Tính góc của trục chính theo hệ tọa độ custom
+        # Custom coordinate: X+ = E→W (left), Y+ = N→S (down)
+        angle_rad = np.arctan2(-major_axis_vector[1], -major_axis_vector[0])  # Đảo dấu để phù hợp với hệ tọa độ custom
+        angle_deg = np.degrees(angle_rad)
+        
+        # Chuẩn hóa góc về [-180, 180]
+        while angle_deg > 180:
+            angle_deg -= 360
+        while angle_deg <= -180:
+            angle_deg += 360
+            
+        if self.debug:
+            print(f"[ModuleDivision] Pallet orientation calculation:")
+            print(f"  Major axis vector: ({major_axis_vector[0]:.1f}, {major_axis_vector[1]:.1f})")
+            print(f"  Calculated angle: {angle_deg:.1f}°")
+        
+        return angle_deg
     
     def _interpolate_obb_region(self, top_left: np.ndarray, top_right: np.ndarray, 
                                bottom_left: np.ndarray, bottom_right: np.ndarray,
@@ -539,7 +592,9 @@ class ModuleDivision:
                         'global_region_id': region.get('global_region_id', 1),
                         'layer': region['layer'],
                         'module': region['module']
-                    }
+                    },
+                    'orientation': region.get('orientation', 0.0),  # Thêm orientation
+                    'pallet_orientation': region.get('pallet_orientation', 0.0)  # Thêm pallet orientation
                 }
                 
                 # Thêm corners nếu có (cho rotated boxes)

@@ -253,37 +253,53 @@ class Theta4WithModuleDivision:
         
         return mappings
     
-    def determine_placement_angle_for_region(self, region_info: Dict, layer: int) -> float:
+    def determine_placement_angle_for_region(self, region_info: Dict, layer: int, region_data: Dict = None) -> float:
         """
-        Xác định góc đặt load dựa trên region và layer.
+        Xác định góc đặt load dựa trên orientation thực tế của region và layer.
+        
+        LOGIC LAYER:
+        - Layer 1: Chia theo CHIỀU DÀI (12cm) → Loads đặt VUÔNG GÓC với X pallet = pallet_orientation + 90°
+        - Layer 2: Chia theo CHIỀU NGẮN (10cm) → Loads đặt SONG SONG với X pallet = pallet_orientation
         
         Args:
             region_info: Thông tin region
-            layer: Layer hiện tại
+            layer: Layer hiện tại  
+            region_data: Dữ liệu đầy đủ của region (bao gồm orientation)
             
         Returns:
-            float: Góc đặt mục tiêu (degrees)
+            float: Góc đặt mục tiêu (degrees) dựa trên orientation thực tế
         """
         region_id = region_info.get('region_id', 1)
         pallet_id = region_info.get('pallet_id', 1)
         
-        # Hướng chuẩn của robot (có thể cấu hình)
-        robot_base_angle = 0.0  # Đông→Tây (E→W)
+        # Lấy orientation thực tế của region (kế thừa từ pallet)
+        if region_data and 'orientation' in region_data:
+            pallet_orientation = region_data['orientation']
+        else:
+            # Fallback về 0° nếu không có thông tin orientation
+            pallet_orientation = 0.0
+            if self.debug:
+                print(f"    [WARNING] Không tìm thấy orientation cho region, sử dụng 0°")
         
         if layer == 1:
-            # Layer 1: Tất cả regions theo hướng chuẩn
-            placement_angle = robot_base_angle
+            # Layer 1: Chia theo CHIỀU DÀI (cạnh 12cm)
+            # → Loads đặt VUÔNG GÓC với X pallet = pallet_orientation + 90°
+            placement_angle = self.normalize_angle(pallet_orientation + 90.0)
         elif layer == 2:
-            # Layer 2: Xen kẽ hướng
-            if region_id % 2 == 1:  # Region lẻ
-                placement_angle = robot_base_angle
-            else:  # Region chẵn
-                placement_angle = self.normalize_angle(robot_base_angle + 90.0)
+            # Layer 2: Chia theo CHIỀU NGẮN (cạnh 10cm)
+            # → Loads đặt SONG SONG với X pallet = pallet_orientation
+            placement_angle = pallet_orientation
         else:
-            placement_angle = robot_base_angle
+            placement_angle = pallet_orientation
         
         if self.debug:
-            print(f"    Placement angle cho Region {region_id} (Layer {layer}): {placement_angle:.1f}°")
+            print(f"    Region {region_id} (Layer {layer}):")
+            print(f"      Pallet orientation: {pallet_orientation:.1f}°")
+            if layer == 1:
+                print(f"      Logic: Layer 1 → Loads VUÔNG GÓC với X pallet (+90°)")
+            elif layer == 2:
+                print(f"      Logic: Layer 2 → Loads SONG SONG với X pallet")
+            print(f"      Placement angle: {placement_angle:.1f}°")
         
         return placement_angle
     
@@ -311,8 +327,8 @@ class Theta4WithModuleDivision:
         region = mapping['target_region']
         region_info = region['region_info']
         
-        # Xác định góc đặt cho region này
-        target_angle = self.determine_placement_angle_for_region(region_info, layer)
+        # Xác định góc đặt cho region này dựa trên orientation thực tế
+        target_angle = self.determine_placement_angle_for_region(region_info, layer, region)
         
         # Lấy góc hiện tại của load
         load_current_angle = load_obj['x_axis_angle']
@@ -644,7 +660,7 @@ def demo_theta4_with_module_division():
     
     # Khởi tạo models
     print(f"\nKhởi tạo models...")
-    yolo_model = YOLOTensorRT(engine_path=ENGINE_PATH, conf=0.5)
+    yolo_model = YOLOTensorRT(engine_path=ENGINE_PATH, conf=0.75)
     theta4_calculator = Theta4WithModuleDivision(debug=True)
     
     # Thực hiện YOLO detection

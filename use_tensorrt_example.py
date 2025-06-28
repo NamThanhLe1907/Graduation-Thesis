@@ -17,6 +17,8 @@ ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "utils", "detection", "best.engine")
 # Cấu hình hiển thị depth - mặc định là False để tránh lag
 SHOW_DEPTH = os.environ.get('SHOW_DEPTH', 'false').lower() in ('true', '1', 'yes')
+# Cấu hình hiển thị theta4 - mặc định là False để tránh lag
+SHOW_THETA4 = os.environ.get('SHOW_THETA4', 'true').lower() in ('true', '1', 'yes')
 
 def draw_rotated_boxes_with_depth(image, detections, depth_results=None, thickness=2):
     """
@@ -188,6 +190,191 @@ def draw_depth_regions_with_rotated_boxes(image, depth_results):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     
     return result_image
+
+def draw_theta4_visualization(image, detections_with_theta4):
+    """
+    Vẽ theta4 visualization với regions, loads và rotation angles từ pipeline.
+    
+    Args:
+        image: Ảnh gốc
+        detections_with_theta4: Kết quả detection từ pipeline bao gồm theta4_result
+        
+    Returns:
+        np.ndarray: Ảnh đã được vẽ với theta4 info
+    """
+    result_image = image.copy()
+    
+    # Lấy theta4 result từ detection
+    theta4_result = detections_with_theta4.get('theta4_result')
+    if theta4_result is None:
+        # Nếu không có theta4 result, chỉ hiển thị thông báo
+        cv2.putText(result_image, "No Theta4 calculation available", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        return result_image
+    
+    # Màu sắc
+    pallet_color = (255, 0, 0)      # Đỏ cho pallet
+    load_color = (0, 255, 0)        # Xanh lá cho load
+    region_color = (0, 255, 255)    # Vàng cho region boundaries
+    mapping_color = (255, 0, 255)   # Magenta cho mapping lines
+    
+    # Vẽ regions từ module division
+    regions_data = theta4_result['regions_result']['regions_data']
+    for i, region in enumerate(regions_data):
+        draw_region_boundary_theta4(result_image, region, region_color, i+1)
+    
+    # Vẽ load objects và theta4 mappings
+    theta4_results = theta4_result['theta4_results']
+    for i, theta4_calc in enumerate(theta4_results):
+        mapping = theta4_calc['mapping']
+        load_obj = mapping['load_object']
+        
+        # Vẽ load với orientation
+        draw_object_with_orientation_theta4(result_image, load_obj, load_color, "LOAD")
+        
+        # Vẽ đường mapping và theta4 command nếu thành công
+        if mapping['mapping_success'] and theta4_calc['theta4_success']:
+            target_region = mapping['target_region']
+            load_center = load_obj['center']
+            region_center = target_region['center']
+            
+            # Vẽ đường mapping
+            cv2.line(result_image, 
+                    (int(load_center[0]), int(load_center[1])),
+                    (int(region_center[0]), int(region_center[1])),
+                    mapping_color, 2)
+            
+            # Vẽ theta4 command gần load
+            theta4_command = theta4_calc.get('theta4_command', 'NO THETA4')
+            rotation_direction = theta4_calc.get('rotation_direction', '')
+            
+            # Text theta4 command
+            draw_text_with_background_theta4(result_image, theta4_command,
+                                           (int(load_center[0]) + 15, int(load_center[1]) + 35),
+                                           (255, 255, 255), (0, 0, 0))
+            
+            # Text hướng xoay (ngắn gọn)
+            direction_short = "CW" if "Clockwise" in rotation_direction else ("CCW" if "Counter" in rotation_direction else "OK")
+            draw_text_with_background_theta4(result_image, f"({direction_short})",
+                                           (int(load_center[0]) + 15, int(load_center[1]) + 55),
+                                           (255, 255, 0), (0, 0, 0))
+    
+    # Vẽ pallet objects
+    for pallet in theta4_result['pallet_objects']:
+        draw_object_with_orientation_theta4(result_image, pallet, pallet_color, "PALLET")
+    
+    # Vẽ summary info ở góc trên
+    draw_summary_info_theta4(result_image, theta4_result)
+    
+    # Vẽ coordinate compass
+    draw_coordinate_compass_theta4(result_image)
+    
+    return result_image
+
+def draw_object_with_orientation_theta4(image, obj, color, obj_type):
+    """Vẽ object với orientation arrow cho theta4 visualization"""
+    import math
+    
+    cx, cy = obj['center']
+    x_axis_angle = obj['x_axis_angle']
+    length = obj['length']
+    width = obj['width']
+    
+    # Vẽ center point
+    cv2.circle(image, (int(cx), int(cy)), 4, color, -1)
+    
+    # Vẽ orientation arrow (theo hệ tọa độ custom)
+    arrow_length = 30
+    end_x = cx - arrow_length * math.cos(math.radians(x_axis_angle))
+    end_y = cy - arrow_length * math.sin(math.radians(x_axis_angle))
+    cv2.arrowedLine(image, (int(cx), int(cy)), 
+                   (int(end_x), int(end_y)), color, 2)
+    
+    # Vẽ thông tin object
+    text1 = f"{obj_type}: {length:.0f}x{width:.0f}"
+    text2 = f"{x_axis_angle:.1f}°"
+    draw_text_with_background_theta4(image, text1, 
+                                   (int(cx) + 8, int(cy) - 25), color, (0, 0, 0))
+    draw_text_with_background_theta4(image, text2, 
+                                   (int(cx) + 8, int(cy) - 10), color, (0, 0, 0))
+
+def draw_region_boundary_theta4(image, region, color, region_num):
+    """Vẽ boundary của region cho theta4 visualization"""
+    if 'corners' in region:
+        # Vẽ OBB corners
+        corners = region['corners']
+        corners_int = [(int(x), int(y)) for x, y in corners]
+        cv2.polylines(image, [np.array(corners_int)], True, color, 2)
+    else:
+        # Vẽ regular bounding box
+        bbox = region['bbox']
+        x1, y1, x2, y2 = [int(x) for x in bbox]
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+    
+    # Vẽ region number
+    center = region['center']
+    draw_text_with_background_theta4(image, f"R{region_num}", 
+                                   (int(center[0]) - 10, int(center[1])), 
+                                   color, (0, 0, 0))
+
+def draw_summary_info_theta4(image, theta4_result):
+    """Vẽ thông tin summary cho theta4 visualization"""
+    summary = theta4_result['summary']
+    layer = theta4_result['layer']
+    
+    y_offset = 20
+    line_height = 18
+    
+    info_lines = [
+        f"Theta4 Layer: {layer}",
+        f"P:{summary['total_pallets']} L:{summary['total_loads']} R:{summary['total_regions']}",
+        f"Map:{summary['successful_mappings']} θ4:{summary['successful_theta4']}",
+        f"Time:{theta4_result['processing_time']*1000:.0f}ms"
+    ]
+    
+    for i, line in enumerate(info_lines):
+        draw_text_with_background_theta4(image, line,
+                                       (10, y_offset + i * line_height),
+                                       (255, 255, 255), (0, 0, 0))
+
+def draw_text_with_background_theta4(image, text, position, color, bg_color=(0, 0, 0)):
+    """Vẽ text với background cho theta4 visualization"""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.4
+    thickness = 1
+    
+    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+    
+    cv2.rectangle(image, 
+                 (position[0] - 2, position[1] - text_size[1] - 2),
+                 (position[0] + text_size[0] + 2, position[1] + 2),
+                 bg_color, -1)
+    
+    cv2.putText(image, text, position, font, font_scale, color, thickness)
+
+def draw_coordinate_compass_theta4(image):
+    """Vẽ compass hệ tọa độ custom cho theta4 visualization"""
+    h, w = image.shape[:2]
+    center_x = w - 60
+    center_y = h - 60
+    
+    # Background
+    cv2.rectangle(image, (center_x - 35, center_y - 35), 
+                 (center_x + 35, center_y + 35), (0, 0, 0), -1)
+    cv2.rectangle(image, (center_x - 35, center_y - 35), 
+                 (center_x + 35, center_y + 35), (255, 255, 255), 1)
+    
+    # Trục X+ (đỏ, E→W)
+    cv2.arrowedLine(image, (center_x, center_y), 
+                   (center_x - 25, center_y), (0, 0, 255), 2)
+    cv2.putText(image, "X+", (center_x - 35, center_y + 3), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+    
+    # Trục Y+ (xanh lá, N→S)
+    cv2.arrowedLine(image, (center_x, center_y), 
+                   (center_x, center_y + 25), (0, 255, 0), 2)
+    cv2.putText(image, "Y+", (center_x + 3, center_y + 35), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
 
 def demo_single_image():
     """Thử nghiệm với một ảnh đơn lẻ"""
@@ -674,10 +861,11 @@ def create_depth():
 def demo_camera():
     """Thử nghiệm với camera thời gian thực"""
     print("Thử nghiệm phát hiện đối tượng với TensorRT trên camera thời gian thực")
-    global SHOW_DEPTH
+    global SHOW_DEPTH, SHOW_THETA4
     
-    # Hiển thị tùy chọn depth
+    # Hiển thị tùy chọn depth và theta4
     print(f"Hiển thị depth map: {'BẬT' if SHOW_DEPTH else 'TẮT'} (Dùng 'd' để bật/tắt)")
+    print(f"Hiển thị theta4 info: {'BẬT' if SHOW_THETA4 else 'TẮT'} (Dùng 't' để bật/tắt)")
     
     # Khởi tạo pipeline với các factory function đã được định nghĩa ở cấp module
     pipeline = ProcessingPipeline(
@@ -686,15 +874,21 @@ def demo_camera():
         depth_factory=create_depth
     )
     
-    # Biến để lưu frame depth cuối cùng
+    # Biến để lưu frame depth và theta4 cuối cùng
     last_depth_viz = None
     last_depth_time = 0
+    last_theta4_viz = None
+    last_theta4_time = 0
     skip_counter = 0
-    max_skip = 5  # Bỏ qua tối đa 3 frames khi xử lý không kịp
+    max_skip = 5  # Bỏ qua tối đa 5 frames khi xử lý không kịp
     
     # Khởi động pipeline
     if pipeline.start(timeout=60.0):
         print("Pipeline đã khởi động thành công!")
+        print("\nPhím điều khiển:")
+        print("  'q': Thoát")
+        print("  'd': Bật/tắt hiển thị depth map")
+        print("  't': Bật/tắt hiển thị theta4 calculation")
         
         try:
             # Vòng lặp hiển thị kết quả
@@ -718,7 +912,7 @@ def demo_camera():
                 if time.time() - start_loop > 0.1:  # Quá 100ms
                     skip_counter += 1
                     if skip_counter >= max_skip:
-                        # Bỏ qua hiển thị depth để giảm tải
+                        # Bỏ qua hiển thị để giảm tải
                         skip_counter = 0
                         continue
                 else:
@@ -753,6 +947,35 @@ def demo_camera():
                 cv2.putText(display_frame, objects_text, (10, 70), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
+                # Thêm thông tin theta4 nếu có
+                theta4_result = detections.get('theta4_result')
+                if theta4_result:
+                    theta4_success = theta4_result['summary']['successful_theta4']
+                    total_loads = theta4_result['summary']['total_loads']
+                    theta4_text = f"Theta4: {theta4_success}/{total_loads}"
+                    cv2.putText(display_frame, theta4_text, (10, 110), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+                
+                # ⭐ HIỂN THỊ ROBOT COORDINATES ⭐
+                robot_coords = detections.get('robot_coordinates', [])
+                if robot_coords:
+                    coords_text = f"Robot Coords: {len(robot_coords)}"
+                    cv2.putText(display_frame, coords_text, (10, 150), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    
+                    # In ra console cho từng object
+                    if len(robot_coords) > 0:
+                        print(f"[ROBOT COORDS] Frame {fps_counter}: {len(robot_coords)} objects")
+                        for coord in robot_coords:
+                            class_name = coord['class']
+                            pixel = coord['camera_pixel']
+                            robot_pos = coord['robot_coordinates']
+                            cam_3d = coord.get('camera_3d')
+                            
+                            print(f"   {class_name}: Pixel({pixel['x']},{pixel['y']}) → Robot(X={robot_pos['x']:.2f}, Y={robot_pos['y']:.2f})")
+                            if cam_3d:
+                                print(f"      (Camera3D: X={cam_3d['X']:.3f}, Y={cam_3d['Y']:.3f}, Z={cam_3d['Z']:.3f})")
+                
                 # Hiển thị kết quả detection với FPS
                 cv2.imshow("Phát hiện đối tượng với TensorRT", display_frame)
                 
@@ -775,6 +998,23 @@ def demo_camera():
                     if last_depth_viz is not None:
                         cv2.imshow("Rotated Depth Regions", last_depth_viz)
                 
+                # ⭐ XỬ LÝ THETA4 CHỈ KHI SHOW_THETA4 ĐƯỢC BẬT ⭐
+                if SHOW_THETA4:
+                    # Chỉ cập nhật theta4 visualization sau mỗi 0.3 giây để tránh lag
+                    if time.time() - last_theta4_time > 0.3:
+                        theta4_result = detections.get('theta4_result')
+                        if theta4_result:
+                            # Sử dụng function theta4 visualization
+                            theta4_viz = draw_theta4_visualization(frame, detections)
+                            
+                            # Lưu lại để tái sử dụng
+                            last_theta4_viz = theta4_viz
+                            last_theta4_time = time.time()
+                    
+                    # Hiển thị theta4 từ lần xử lý gần nhất
+                    if last_theta4_viz is not None:
+                        cv2.imshow("Theta4 Calculation & Regions", last_theta4_viz)
+                
                 # Xử lý phím nhấn
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
@@ -785,6 +1025,12 @@ def demo_camera():
                     print(f"Hiển thị depth map: {'BẬT' if SHOW_DEPTH else 'TẮT'}")
                     if not SHOW_DEPTH:
                         cv2.destroyWindow("Rotated Depth Regions")
+                elif key == ord('t'):
+                    # Bật/tắt hiển thị theta4
+                    SHOW_THETA4 = not SHOW_THETA4
+                    print(f"Hiển thị theta4 calculation: {'BẬT' if SHOW_THETA4 else 'TẮT'}")
+                    if not SHOW_THETA4:
+                        cv2.destroyWindow("Theta4 Calculation & Regions")
                         
         except KeyboardInterrupt:
             print("Đã nhận tín hiệu ngắt từ bàn phím")
@@ -800,13 +1046,19 @@ def demo_camera():
             print(f"Lỗi: {error}")
 
 if __name__ == "__main__":
-    print("Demo sử dụng model TensorRT với Rotated Bounding Boxes và Module Division")
+    print("Demo sử dụng model TensorRT với Rotated Bounding Boxes, Module Division và Theta4 Calculation")
     print("1. Thử nghiệm với ảnh đơn lẻ (có Module Division + depth estimation)")
-    print("2. Thử nghiệm với camera thời gian thực (có Module Division + depth estimation)")
+    print("2. Thử nghiệm với camera thời gian thực (có Module Division + depth estimation + Theta4)")
     print("3. Thử nghiệm với tất cả ảnh trong folder images_pallets2 (có Module Division + depth estimation)")
+    print("\nTÍNH NĂNG MỚI - THETA4 CALCULATION:")
+    print("- Chế độ camera (2) hiện có tính toán góc xoay theta4 cho robot")
+    print("- Sử dụng phím 't' để bật/tắt hiển thị theta4 trong real-time")
+    print("- Theta4 sẽ hiển thị góc cần xoay cho từng load để đặt vào regions")
+    print("- Bao gồm visualization với mapping lines và rotation commands")
     print("\nGhi chú:")
     print("- Tất cả các demo đều sử dụng Module Division để chia pallet thành các vùng nhỏ")
     print("- Depth estimation được thực hiện cho từng vùng riêng biệt")
+    print("- Theta4 calculation chỉ hoạt động khi có loads (class 0,1) và regions từ pallets (class 2)")
     print("- Tất cả các demo đều sử dụng chung cấu hình depth model")
     print("Bạn có thể đặt các biến môi trường để điều khiển depth model:")
     print("  DEPTH_DEVICE: Thiết bị chạy depth model")
@@ -830,15 +1082,20 @@ if __name__ == "__main__":
     print("\n  SHOW_DEPTH: Bật/tắt hiển thị depth map")
     print("    - SHOW_DEPTH=true     # Hiển thị depth map (có thể gây lag)")
     print("    - SHOW_DEPTH=false    # Tắt hiển thị depth map (mặc định)")
+    print("\n  SHOW_THETA4: Bật/tắt hiển thị theta4 calculation")
+    print("    - SHOW_THETA4=true    # Hiển thị theta4 info (có thể gây lag)")
+    print("    - SHOW_THETA4=false   # Tắt hiển thị theta4 info (mặc định)")
     print("\n  USE_CAMERA_CALIBRATION: Bật/tắt camera calibration")
     print("    - USE_CAMERA_CALIBRATION=true    # Sử dụng camera calibration (mặc định)")
     print("    - USE_CAMERA_CALIBRATION=false   # Tắt camera calibration")
     print("\n  CAMERA_CALIBRATION_FILE: Đường dẫn file camera calibration")
     print("    - CAMERA_CALIBRATION_FILE=camera_params.npz  # File calibration (mặc định)")
-    print("\n  Ví dụ Regular Depth với Camera Calibration:")
-    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=regular && set DEPTH_MODEL=small && set USE_CAMERA_CALIBRATION=true && python use_tensorrt_example.py")
-    print("\n  Ví dụ Metric Depth (Indoor) với Camera Calibration:")
-    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=indoor && set DEPTH_MODEL=base && set USE_CAMERA_CALIBRATION=true && python use_tensorrt_example.py")
+    print("\n  Ví dụ với Theta4 enabled:")
+    print("    set SHOW_THETA4=true && python use_tensorrt_example.py")
+    print("\n  Ví dụ Regular Depth với Camera Calibration và Theta4:")
+    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=regular && set DEPTH_MODEL=small && set USE_CAMERA_CALIBRATION=true && set SHOW_THETA4=true && python use_tensorrt_example.py")
+    print("\n  Ví dụ Metric Depth (Indoor) với Camera Calibration và Theta4:")
+    print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=indoor && set DEPTH_MODEL=base && set USE_CAMERA_CALIBRATION=true && set SHOW_THETA4=true && python use_tensorrt_example.py")
     print("\n  Ví dụ Metric Depth (Outdoor) không có Camera Calibration:")
     print("    set DEPTH_DEVICE=cuda && set DEPTH_TYPE=metric && set DEPTH_SCENE=outdoor && set DEPTH_MODEL=small && set USE_CAMERA_CALIBRATION=false && python use_tensorrt_example.py")
     print("\n  Ví dụ với file calibration tùy chỉnh:")

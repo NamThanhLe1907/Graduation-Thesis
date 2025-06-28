@@ -190,10 +190,47 @@ def _yolo_detection_worker(
             
             from detection import ModuleDivision
             
+            # Import Robot Coordinate Transform
+            from detection.utils.robot_coordinate_transform import RobotCoordinateTransform
+            from detection.utils.camera_calibration import CameraCalibration
+            
+            # Import Theta4WithModuleDivision class
+            try:
+                import sys
+                import os
+                # Thêm thư mục gốc vào sys.path để import theta4_with_module_division
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(current_dir)
+                if parent_dir not in sys.path:
+                    sys.path.insert(0, parent_dir)
+                
+                from theta4_with_module_division import Theta4WithModuleDivision
+                theta4_available = True
+                print(f"[YOLO Process] Theta4WithModuleDivision imported successfully")
+            except ImportError as e:
+                print(f"[YOLO Process] Warning: Could not import Theta4WithModuleDivision: {e}")
+                theta4_available = False
+            
             yolo_model = yolo_factory()
             print(f"[YOLO Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(yolo_model).__name__}")
             divider = ModuleDivision()
             print(f"[YOLO Process] ModuleDivision đã được tạo, testing default value...")
+            
+            # Khởi tạo Robot Coordinate Transform và Camera Calibration
+            robot_transformer = RobotCoordinateTransform()
+            camera_calibration = CameraCalibration()
+            print(f"[YOLO Process] Robot transformer và camera calibration đã được khởi tạo")
+            
+            # Khởi tạo Theta4 calculator nếu có thể
+            theta4_calculator = None
+            if theta4_available:
+                try:
+                    theta4_calculator = Theta4WithModuleDivision(debug=False)  # Tắt debug để tránh spam log
+                    print(f"[YOLO Process] Theta4Calculator đã được khởi tạo thành công")
+                except Exception as e:
+                    print(f"[YOLO Process] Warning: Could not initialize Theta4Calculator: {e}")
+                    theta4_calculator = None
+            
             ready_event.set()
             
             detection_count = 0
@@ -261,8 +298,96 @@ def _yolo_detection_worker(
                         depth_regions = pallet_depth_regions + non_pallet_depth_regions
                         print(f"[PIPELINE DEBUG] Total depth regions: {len(depth_regions)}")
 
-                        # Gửi kết quả detection ra ngoài
-                        detection_queue.put((frame, detections))
+                        # ⭐ THÊM THETA4 CALCULATION TẠI ĐÂY ⭐
+                        theta4_result = None
+                        if theta4_calculator is not None:
+                            try:
+                                # Chỉ tính theta4 nếu có loads (class 0, 1) và có regions
+                                has_loads = any(cls in [0.0, 1.0] for cls in detections.get('classes', []))
+                                has_regions = len(pallet_depth_regions) > 0
+                                
+                                if has_loads and has_regions:
+                                    print(f"[PIPELINE DEBUG] Tính toán Theta4...")
+                                    theta4_result = theta4_calculator.process_full_pipeline(detections, layer=1)
+                                    print(f"[PIPELINE DEBUG] Theta4 completed: {theta4_result['summary']['successful_theta4']} successful calculations")
+                                else:
+                                    print(f"[PIPELINE DEBUG] Bỏ qua Theta4: has_loads={has_loads}, has_regions={has_regions}")
+                            except Exception as e:
+                                print(f"[YOLO Process] Warning: Theta4 calculation failed: {e}")
+                                theta4_result = None
+
+                        # ⭐ THÊM ROBOT COORDINATE TRANSFORMATION ⭐
+                        robot_coordinates = []
+                        if 'classes' in detections and detections['classes']:
+                            classes = detections['classes']
+                            bboxes = detections.get('bounding_boxes', [])
+                            scores = detections.get('scores', [])
+                            
+                            for i, cls in enumerate(classes):
+                                try:
+                                    # Chỉ xử lý pallet (2), load (0), load2 (1)
+                                    class_names = {0: 'load', 1: 'load2', 2: 'pallet'}
+                                    if cls not in class_names:
+                                        continue
+                                    
+                                    if i < len(bboxes):
+                                        bbox = bboxes[i]
+                                        center_x = (bbox[0] + bbox[2]) / 2
+                                        center_y = (bbox[1] + bbox[3]) / 2
+                                        confidence = scores[i] if i < len(scores) else 0.0
+                                        
+                                        # Chuyển đổi từ camera pixel sang robot coordinates
+                                        robot_x, robot_y = robot_transformer.camera_to_robot(center_x, center_y)
+                                        
+                                        # Tính thêm tọa độ 3D camera để so sánh (sử dụng camera calibration)
+                                        camera_3d = None
+                                        try:
+                                            test_depth = 2.0  # Depth giả định
+                                            X_3d, Y_3d, Z_3d = camera_calibration.pixel_to_3d(
+                                                center_x, center_y, test_depth
+                                            )
+                                            camera_3d = {
+                                                'X': round(X_3d, 3),
+                                                'Y': round(Y_3d, 3), 
+                                                'Z': round(Z_3d, 3)
+                                            }
+                                        except Exception as e:
+                                            print(f"[YOLO Process] Camera 3D calculation failed: {e}")
+                                        
+                                        coord_info = {
+                                            'class': class_names[cls],
+                                            'class_id': int(cls),
+                                            'confidence': round(confidence, 3),
+                                            'camera_pixel': {
+                                                'x': int(center_x),
+                                                'y': int(center_y)
+                                            },
+                                            'robot_coordinates': {
+                                                'x': round(robot_x, 2),
+                                                'y': round(robot_y, 2)
+                                            },
+                                            'camera_3d': camera_3d,  # Thêm để so sánh
+                                            'bbox': [int(x) for x in bbox]
+                                        }
+                                        
+                                        robot_coordinates.append(coord_info)
+                                        
+                                        # In ra console
+                                        print(f"[ROBOT COORDS] {class_names[cls]}: Pixel({int(center_x)},{int(center_y)}) → Robot(X={robot_x:.2f}, Y={robot_y:.2f})")
+                                        if camera_3d:
+                                            print(f"                Camera3D: X={camera_3d['X']:.3f}, Y={camera_3d['Y']:.3f}, Z={camera_3d['Z']:.3f}")
+                                        
+                                except Exception as e:
+                                    print(f"[YOLO Process] Error processing robot coordinate for class {cls}: {e}")
+
+                        # Thêm theta4 info và robot coordinates vào detections để truyền ra ngoài
+                        detections_with_theta4 = detections.copy()
+                        detections_with_theta4['theta4_result'] = theta4_result
+                        detections_with_theta4['divided_result'] = divided_result  # Cũng truyền module division result
+                        detections_with_theta4['robot_coordinates'] = robot_coordinates  # ⭐ THÊM ROBOT COORDINATES
+
+                        # Gửi kết quả detection (bao gồm theta4) ra ngoài
+                        detection_queue.put((frame, detections_with_theta4))
                         
                         # Gửi thông tin cần thiết cho depth process (non-blocking)
                         depth_info = {

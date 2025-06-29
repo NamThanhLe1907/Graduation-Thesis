@@ -381,21 +381,92 @@ class RegionDivisionPLCIntegration:
     def process_detection_and_send_to_plc(self, detections: Dict[str, Any], layer: int = 1) -> Tuple[List[Dict], bool]:
         """
         Xử lý detection hoàn chỉnh: chia regions và gửi vào PLC theo BAG PALLET TRACKING
+        ⭐ FIXED: Sử dụng robot coordinates từ pipeline thay vì tự tính ⭐
         
         Args:
-            detections: Kết quả detection từ YOLO
+            detections: Kết quả detection từ YOLO (phải có robot_coordinates từ pipeline)
             layer: Layer để chia
             
         Returns:
             Tuple[List[Dict], bool]: (regions_data, send_success)
         """
-        # Bước 1: Chia regions và update bag pallet tracking
+        # ⭐ STEP 1: Lấy robot coordinates từ pipeline (ĐÚNG) ⭐
+        pipeline_robot_coords = detections.get('robot_coordinates', [])
+        if not pipeline_robot_coords:
+            if self.debug:
+                print(f"[RegionPLC] ❌ Không có robot_coordinates từ pipeline!")
+            return [], False
+        
+        # Bước 2: Chia regions sử dụng Module Division (chỉ để có region structure)
         regions_data = self.process_detection_and_divide_regions(detections, layer)
         
-        # Bước 2: Gửi vào PLC theo bag pallet tracking (không cần truyền regions_data)
+        # ⭐ STEP 3: MAP pipeline robot coords với regions ⭐ 
+        # Thay vì sử dụng robot coords từ regions_data (SAI), 
+        # sử dụng robot coords từ pipeline (ĐÚNG)
+        self._map_pipeline_coords_to_regions(pipeline_robot_coords, regions_data)
+        
+        # Bước 4: Gửi vào PLC theo bag pallet tracking
         send_success = self.send_regions_to_plc()
         
         return regions_data, send_success
+    
+    def _map_pipeline_coords_to_regions(self, pipeline_robot_coords: List[Dict], regions_data: List[Dict]):
+        """
+        ⭐ MAP robot coordinates từ pipeline vào region system ⭐
+        
+        Args:
+            pipeline_robot_coords: Robot coordinates từ pipeline (ĐÚNG)
+            regions_data: Regions từ module division
+        """
+        if self.debug:
+            print(f"[RegionPLC] 🔗 Mapping {len(pipeline_robot_coords)} pipeline coords với {len(regions_data)} regions...")
+        
+        # ⭐ RESET CURRENT REGION DATA ⭐
+        self.current_region_data = {
+            'loads': None,
+            'pallets1': None,
+            'pallets2': None
+        }
+        
+        # ⭐ STRATEGY: Sử dụng trực tiếp pipeline robot coordinates với region assignment ⭐
+        for coord in pipeline_robot_coords:
+            assigned_region = coord.get('assigned_region')  # Region từ pipeline 
+            robot_pos = coord['robot_coordinates']  # Robot coordinates ĐÚNG từ pipeline
+            
+            if assigned_region and assigned_region in self.current_region_data:
+                # Tạo region data với coordinates ĐÚNG từ pipeline
+                region_with_coords = {
+                    'region_id': 2,  # Sử dụng R2 làm representative (center region)
+                    'pallet_id': 1 if assigned_region == 'pallets1' else (2 if assigned_region == 'pallets2' else 1),
+                    'robot_coordinates': {
+                        'px': robot_pos['x'],  # ⭐ SỬ DỤNG PIPELINE COORDS (ĐÚNG) ⭐
+                        'py': robot_pos['y']   # ⭐ SỬ DỤNG PIPELINE COORDS (ĐÚNG) ⭐
+                    },
+                    'pixel_center': [coord['camera_pixel']['x'], coord['camera_pixel']['y']],
+                    'class': coord['class']
+                }
+                
+                # Update BAG PALLET TRACKING theo region
+                if assigned_region == 'pallets1':
+                    self.bag_pallet_1 = region_with_coords['pallet_id']
+                    self.current_region_data['pallets1'] = region_with_coords
+                    if self.debug:
+                        print(f"    📦 bag_pallet_1 = {self.bag_pallet_1} (Pipeline: {coord['class']} ở pallets1)")
+                elif assigned_region == 'pallets2':
+                    self.bag_pallet_2 = region_with_coords['pallet_id'] 
+                    self.current_region_data['pallets2'] = region_with_coords
+                    if self.debug:
+                        print(f"    📦 bag_pallet_2 = {self.bag_pallet_2} (Pipeline: {coord['class']} ở pallets2)")
+                elif assigned_region == 'loads':
+                    self.current_region_data['loads'] = region_with_coords
+                    if self.debug:
+                        print(f"    📦 loads region updated (Pipeline: {coord['class']} ở loads)")
+                
+                if self.debug:
+                    print(f"    ✅ Mapped {coord['class']}: [{assigned_region}] → Px={robot_pos['x']:.2f}, Py={robot_pos['y']:.2f}")
+            else:
+                if self.debug:
+                    print(f"    ⚠️ Skipped {coord['class']}: No region assignment")
     
     def get_bag_pallet_status(self) -> Dict[str, Any]:
         """
@@ -425,24 +496,51 @@ class RegionDivisionPLCIntegration:
         
         return status
     
-    def create_visualization(self, image: np.ndarray, regions_data: List[Dict]) -> np.ndarray:
+    # ⭐ ENHANCED VISUALIZATION WITH COMPLETED REGIONS ⭐
+    def create_visualization(self, image: np.ndarray, regions_data: List[Dict] = None, 
+                           completed_regions: List[str] = None) -> np.ndarray:
         """
-        Tạo visualization cho regions với robot coordinates
+        ⭐ ENHANCED: Tạo visualization cho regions với robot coordinates + completed status ⭐
         
         Args:
             image: Ảnh gốc
-            regions_data: Danh sách regions với robot coordinates
+            regions_data: Danh sách regions với robot coordinates (optional)
+            completed_regions: List tên regions đã hoàn thành (e.g. ['P1R1', 'P1R2'])
             
         Returns:
             np.ndarray: Ảnh đã vẽ visualization
         """
         result_image = image.copy()
         
-        # Màu sắc cho regions
-        region_colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]  # Xanh, đỏ, xanh dương
+        # Sử dụng last_regions_data nếu không có regions_data
+        if regions_data is None:
+            regions_data = self.last_regions_data
         
+        if not regions_data:
+            # Vẽ status cơ bản nếu không có regions
+            cv2.putText(result_image, "Waiting for regions...", (10, 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            return result_image
+        
+        # ⭐ ENHANCED: Màu sắc cho regions với completed status ⭐
+        def get_region_color(region_data, completed_regions):
+            """Get color based on completion status"""
+            if completed_regions:
+                region_id = region_data.get('region_id', 0)
+                pallet_id = region_data.get('pallet_id', 0)
+                region_name = f"P{pallet_id}R{region_id}"
+                
+                if region_name in completed_regions:
+                    return (0, 255, 0)  # 🟢 Xanh lá - Hoàn thành
+                else:
+                    return (0, 255, 255)  # 🟡 Vàng - Đang chờ/Đang xử lý
+            else:
+                # Default colors khi không có completed info
+                return [(0, 255, 0), (255, 0, 0), (0, 0, 255)][region_data.get('region_id', 1) % 3]
+        
+        # Vẽ từng region
         for i, region_data in enumerate(regions_data):
-            color = region_colors[i % len(region_colors)]
+            color = get_region_color(region_data, completed_regions)
             
             # Vẽ region boundary
             if 'corners' in region_data and region_data['corners']:
@@ -460,17 +558,22 @@ class RegionDivisionPLCIntegration:
             center = region_data['pixel_center']
             cv2.circle(result_image, (int(center[0]), int(center[1])), 8, color, -1)
             
-            # Vẽ thông tin region và robot coordinates
+            # ⭐ ENHANCED: Hiển thị completion status ⭐
             robot_coords = region_data['robot_coordinates']
             region_id = region_data['region_id']
             pallet_id = region_data['pallet_id']
             applied_offset = region_data.get('applied_region_offset', 'unknown')
             
+            # Check completion status
+            region_name = f"P{pallet_id}R{region_id}"
+            is_completed = completed_regions and region_name in completed_regions
+            status_icon = "✅" if is_completed else "⏳"
+            
             text_lines = [
-                f"[{applied_offset}]",           # Region name
-                f"P{pallet_id}R{region_id}",     # Pallet/Region ID
-                f"Px:{robot_coords['px']:.1f}",  # Robot X coordinate
-                f"Py:{robot_coords['py']:.1f}"   # Robot Y coordinate
+                f"{status_icon} [{applied_offset}]",    # Status + Region name
+                f"P{pallet_id}R{region_id}",            # Pallet/Region ID
+                f"Px:{robot_coords['px']:.1f}",         # Robot X coordinate
+                f"Py:{robot_coords['py']:.1f}"          # Robot Y coordinate
             ]
             
             # Vẽ từng dòng text
@@ -478,18 +581,20 @@ class RegionDivisionPLCIntegration:
                 text_y = int(center[1]) - 40 + j * 20
                 text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
                 
-                # Background cho text
+                # Background cho text với màu tương ứng completion status
+                bg_color = (0, 100, 0) if is_completed else (0, 0, 0)  # Xanh đậm nếu completed
                 cv2.rectangle(result_image,
                             (int(center[0]) - text_size[0]//2 - 2, text_y - text_size[1] - 2),
                             (int(center[0]) + text_size[0]//2 + 2, text_y + 2),
-                            (0, 0, 0), -1)
+                            bg_color, -1)
                 
-                # Text
+                # Text color
+                text_color = (255, 255, 255) if not is_completed else (200, 255, 200)  # Xanh nhạt nếu completed
                 cv2.putText(result_image, text,
                           (int(center[0]) - text_size[0]//2, text_y),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
         
-        # ⭐ VẼ BAG PALLET STATUS Ở GÓC ẢNH ⭐
+        # ⭐ VẼ BAG PALLET STATUS VÀ COMPLETION STATISTICS ⭐
         status_y = 30
         status_text = [
             f"PLC: {'🟢 Connected' if self.plc_connected else '🔴 Disconnected'}",
@@ -499,22 +604,39 @@ class RegionDivisionPLCIntegration:
             f"Regions: {len(regions_data)} | Active: {sum(1 for x in self.current_region_data.values() if x is not None)}"
         ]
         
+        # ⭐ THÊM COMPLETION STATISTICS ⭐
+        if completed_regions:
+            total_expected = len(regions_data)  # Tổng regions dự kiến
+            completed_count = len(completed_regions)
+            progress_text = f"Progress: {completed_count}/{total_expected} ✅"
+            status_text.append(progress_text)
+            
+            # Hiển thị completed regions
+            if completed_count > 0:
+                completed_str = ", ".join(completed_regions)
+                status_text.append(f"Completed: {completed_str}")
+        
+        # Vẽ status text
         for i, text in enumerate(status_text):
-            y_pos = status_y + i * 25
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             
-            # Background
-            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-            cv2.rectangle(result_image, (10, y_pos - 18), (10 + text_size[0] + 10, y_pos + 5), (0, 0, 0), -1)
+            # Background cho text
+            cv2.rectangle(result_image,
+                        (10 - 2, status_y + i * 20 - text_size[1] - 2),
+                        (10 + text_size[0] + 2, status_y + i * 20 + 2),
+                        (0, 0, 0), -1)
             
-            # Text color
-            if i == 0:  # PLC status
-                color = (0, 255, 0) if self.plc_connected else (0, 0, 255)
-            elif i == 1:  # BAG PALLET title
-                color = (0, 255, 255)
-            else:  # Other info
-                color = (255, 255, 255)
+            # Chọn màu text
+            if "🟢" in text or "✅" in text:
+                color = (0, 255, 0)  # Xanh lá
+            elif "🔴" in text or "Progress:" in text:
+                color = (255, 255, 0)  # Vàng
+            else:
+                color = (255, 255, 255)  # Trắng
             
-            cv2.putText(result_image, text, (15, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.putText(result_image, text,
+                      (10, status_y + i * 20),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
         return result_image
 

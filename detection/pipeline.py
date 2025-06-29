@@ -6,7 +6,7 @@ import time
 import traceback
 import threading
 import queue
-from typing import Any, Callable,  Optional
+from typing import Any, Callable,  Optional, List, Dict
 import numpy as np
 import cv2
 import logging
@@ -124,6 +124,13 @@ def _capture_frames_worker(
     try:
         print(f"[Camera Process {mp.current_process().pid}] Đã khởi động")
         
+        # ⭐ CHECK LOGGING ENVIRONMENT FOR WORKER PROCESS CONTROL ⭐
+        import os
+        import logging
+        if os.environ.get('WORKER_LOGGING_DISABLED') == 'true':
+            # Disable ALL logging for this worker process
+            logging.getLogger().setLevel(logging.CRITICAL)
+        
         try:
             camera = camera_factory()
             print(f"[Camera Process {mp.current_process().pid}] Camera đã khởi tạo thành công: {type(camera).__name__}")
@@ -201,6 +208,16 @@ def _yolo_detection_worker(
     try:
         print(f"[YOLO Process {mp.current_process().pid}] Đã khởi động")
         
+        # ⭐ CHECK LOGGING ENVIRONMENT FOR WORKER PROCESS CONTROL ⭐
+        import os
+        import logging
+        if os.environ.get('WORKER_LOGGING_DISABLED') == 'true':
+            # Disable ALL logging for this worker process
+            logging.getLogger().setLevel(logging.CRITICAL)
+            logging.getLogger('detection.utils.module_division').setLevel(logging.CRITICAL)
+            logging.getLogger('detection.utils.region_sequencer').setLevel(logging.CRITICAL)
+            logging.getLogger('detection.utils.region_manager').setLevel(logging.CRITICAL)
+        
         try:
             # Import module division inside worker to avoid multiprocessing issues
             import importlib
@@ -266,9 +283,11 @@ def _yolo_detection_worker(
 
             # ⭐ THÊM: Khởi tạo PLC Communication cho Region Division ⭐
             plc_comm = None
-            enable_plc_regions = os.environ.get('ENABLE_PLC_REGIONS', 'true').lower() in ('true', '1', 'yes')
-            # ⭐ FORCE ENABLE PLC cho testing với PLC thật ⭐ 
-            enable_plc_regions = True
+            # 🚨 DISABLED: PLC được handle bởi region_division_plc_integration.py
+            enable_plc_regions = False  # Disable để tránh xung đột với BAG PALLET TRACKING
+            # enable_plc_regions = os.environ.get('ENABLE_PLC_REGIONS', 'true').lower() in ('true', '1', 'yes')
+            # # ⭐ FORCE ENABLE PLC cho testing với PLC thật ⭐ 
+            # enable_plc_regions = True
             plc_available = True
             if enable_plc_regions and plc_available:
                 try:
@@ -341,7 +360,9 @@ def _yolo_detection_worker(
                             print(f"  divided_result error: {divided_result.get('processing_info', {}).get('error', 'None')}")
 
                         # ⭐ SEQUENTIAL REGION SENDING WITH Z COORDINATES (PLAN IMPLEMENTATION) ⭐ 
-                        if plc_comm and len(pallet_depth_regions) > 0:
+                        # 🚨 DISABLED: Xung đột offset DB26 với region_division_plc_integration.py
+                        # region_division_plc_integration.py đã handle PLC sending với BAG PALLET TRACKING
+                        if False and plc_comm and len(pallet_depth_regions) > 0:
                             try:
                                 # ⭐ IMPORT REGION SEQUENCER ⭐
                                 from detection.utils.region_sequencer import RegionSequencer
@@ -734,6 +755,14 @@ def _depth_estimation_worker(
     """
     try:
         # print(f"[Depth Process {mp.current_process().pid}] Đã khởi động")
+        
+        # ⭐ CHECK LOGGING ENVIRONMENT FOR WORKER PROCESS CONTROL ⭐
+        import os
+        import logging
+        if os.environ.get('WORKER_LOGGING_DISABLED') == 'true':
+            # Disable ALL logging for this worker process
+            logging.getLogger().setLevel(logging.CRITICAL)
+        
         import threading
         import queue
         
@@ -1288,35 +1317,70 @@ class ProcessingPipeline:
         if self.plc_integration:
             self.plc_integration.disconnect_plc()
     
-    def get_plc_integration(self):
+    def get_plc_integration(self) -> Optional['RegionDivisionPLCIntegration']:
         """
-        Lấy PLC integration object.
+        ⭐ ENHANCED: Lấy PLC integration instance với completed regions support ⭐
         
         Returns:
-            RegionDivisionPLCIntegration hoặc None
+            RegionDivisionPLCIntegration instance hoặc None
         """
         return self.plc_integration
     
-    def send_region_to_plc(self, detections: dict) -> bool:
+    def get_completed_regions(self) -> List[str]:
         """
-        Gửi regions từ detections vào PLC.
+        ⭐ NEW: Lấy danh sách regions đã hoàn thành từ sequencer ⭐
+        
+        Returns:
+            List tên regions đã hoàn thành (e.g. ['P1R1', 'P1R2'])
+        """
+        try:
+            if self.sequencer_proxy and self.sequencer_proxy.is_available():
+                status = self.sequencer_proxy.get_queue_status()
+                completed_regions = []
+                
+                # Extract completed regions từ sequencer status
+                for region in status.get('completed_regions', []):
+                    if isinstance(region, dict):
+                        pallet_id = region.get('pallet_id', 1)
+                        region_id = region.get('region_id', 1)
+                        completed_regions.append(f"P{pallet_id}R{region_id}")
+                    elif isinstance(region, str):
+                        completed_regions.append(region)
+                
+                return completed_regions
+            return []
+        except Exception as e:
+            # print(f"[Pipeline] Error getting completed regions: {e}")
+            return []
+    
+    def create_plc_visualization(self, frame: np.ndarray, 
+                               regions_data: List[Dict] = None) -> Optional[np.ndarray]:
+        """
+        ⭐ NEW: Tạo PLC visualization với completed regions support ⭐
         
         Args:
-            detections: Detection results từ pipeline
+            frame: Frame gốc
+            regions_data: Region data (optional)
             
         Returns:
-            bool: True nếu gửi thành công
+            Visualization image hoặc None
         """
         if not self.plc_integration:
-            print(f"[Pipeline] PLC integration not available")
-            return False
+            return None
         
-        # Sử dụng existing method từ RegionDivisionPLCIntegration
-        regions_data, send_success = self.plc_integration.process_detection_and_send_to_plc(
-            detections, layer=1
-        )
-        
-        return send_success
+        try:
+            # Lấy completed regions từ sequencer
+            completed_regions = self.get_completed_regions()
+            
+            # Tạo visualization với completed status
+            visualization = self.plc_integration.create_visualization(
+                frame, regions_data, completed_regions
+            )
+            
+            return visualization
+        except Exception as e:
+            print(f"[Pipeline] Error creating PLC visualization: {e}")
+            return None
 
 
 class SequencerProxy:

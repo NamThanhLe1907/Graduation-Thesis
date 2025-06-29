@@ -68,6 +68,14 @@ class RegionDivisionPLCIntegration:
             'pallets2': None    # Lưu data region pallets2
         }
         
+        # ⭐ BAG SEQUENCE SETTINGS ⭐
+        self.current_bag_number = 1  # Bag hiện tại đang đặt (1, 2, hoặc 3)
+        self.bag_to_region_mapping = {
+            1: 1,  # bao 1 → region_id 1 (R1) 
+            2: 3,  # bao 2 → region_id 3 (R3)
+            3: 2   # bao 3 → region_id 2 (R2, center, cuối cùng)
+        }
+        
         if self.debug:
             print(f"[RegionPLC] Khởi tạo với PLC: {plc_ip}:{plc_rack}:{plc_slot}")
             print(f"[RegionPLC] DB26 Memory Layout (Updated):")
@@ -434,16 +442,21 @@ class RegionDivisionPLCIntegration:
             robot_pos = coord['robot_coordinates']  # Robot coordinates ĐÚNG từ pipeline
             
             if assigned_region and assigned_region in self.current_region_data:
+                # ⭐ DETERMINE REGION_ID BY BAG POSITION ⭐
+                target_region_id = self.bag_to_region_mapping.get(self.current_bag_number, 1)
+                
                 # Tạo region data với coordinates ĐÚNG từ pipeline
                 region_with_coords = {
-                    'region_id': 2,  # Sử dụng R2 làm representative (center region)
+                    'region_id': target_region_id,  # ⭐ FIXED: Map theo bag number thay vì hard-code R2 ⭐
                     'pallet_id': 1 if assigned_region == 'pallets1' else (2 if assigned_region == 'pallets2' else 1),
                     'robot_coordinates': {
                         'px': robot_pos['x'],  # ⭐ SỬ DỤNG PIPELINE COORDS (ĐÚNG) ⭐
                         'py': robot_pos['y']   # ⭐ SỬ DỤNG PIPELINE COORDS (ĐÚNG) ⭐
                     },
                     'pixel_center': [coord['camera_pixel']['x'], coord['camera_pixel']['y']],
-                    'class': coord['class']
+                    'class': coord['class'],
+                    'bag_number': self.current_bag_number,  # ⭐ NEW: Track bag number ⭐
+                    'sequence_mapping': f"bao {self.current_bag_number} → R{target_region_id}"  # ⭐ DEBUG INFO ⭐
                 }
                 
                 # Update BAG PALLET TRACKING theo region
@@ -452,21 +465,58 @@ class RegionDivisionPLCIntegration:
                     self.current_region_data['pallets1'] = region_with_coords
                     if self.debug:
                         print(f"    📦 bag_pallet_1 = {self.bag_pallet_1} (Pipeline: {coord['class']} ở pallets1)")
+                        print(f"    🎯 BAG MAPPING: {region_with_coords['sequence_mapping']}")
                 elif assigned_region == 'pallets2':
                     self.bag_pallet_2 = region_with_coords['pallet_id'] 
                     self.current_region_data['pallets2'] = region_with_coords
                     if self.debug:
                         print(f"    📦 bag_pallet_2 = {self.bag_pallet_2} (Pipeline: {coord['class']} ở pallets2)")
+                        print(f"    🎯 BAG MAPPING: {region_with_coords['sequence_mapping']}")
                 elif assigned_region == 'loads':
                     self.current_region_data['loads'] = region_with_coords
                     if self.debug:
                         print(f"    📦 loads region updated (Pipeline: {coord['class']} ở loads)")
+                        print(f"    🎯 BAG MAPPING: {region_with_coords['sequence_mapping']}")
                 
                 if self.debug:
-                    print(f"    ✅ Mapped {coord['class']}: [{assigned_region}] → Px={robot_pos['x']:.2f}, Py={robot_pos['y']:.2f}")
+                    print(f"    ✅ Mapped {coord['class']}: [{assigned_region}] P{region_with_coords['pallet_id']}R{region_with_coords['region_id']} → Px={robot_pos['x']:.2f}, Py={robot_pos['y']:.2f}")
             else:
                 if self.debug:
                     print(f"    ⚠️ Skipped {coord['class']}: No region assignment")
+    
+    def set_current_bag_number(self, bag_number: int):
+        """
+        ⭐ NEW: Set current bag number để map đúng region theo sequence ⭐
+        
+        Args:
+            bag_number: Bag number (1, 2, hoặc 3)
+        """
+        if bag_number in self.bag_to_region_mapping:
+            old_bag = self.current_bag_number
+            self.current_bag_number = bag_number
+            target_region = self.bag_to_region_mapping[bag_number]
+            
+            if self.debug:
+                print(f"🎯 [BAG CONTROL] Switched: bao {old_bag} → bao {bag_number} (maps to R{target_region})")
+                print(f"   Sequence mapping: {self.bag_to_region_mapping}")
+        else:
+            if self.debug:
+                print(f"❌ [BAG CONTROL] Invalid bag number: {bag_number}. Valid: {list(self.bag_to_region_mapping.keys())}")
+    
+    def get_current_bag_info(self) -> Dict[str, Any]:
+        """
+        ⭐ NEW: Get current bag information ⭐
+        
+        Returns:
+            Dict: Current bag info và mapping
+        """
+        target_region = self.bag_to_region_mapping.get(self.current_bag_number, 1)
+        return {
+            'current_bag_number': self.current_bag_number,
+            'target_region_id': target_region,
+            'sequence_mapping': f"bao {self.current_bag_number} → R{target_region}",
+            'all_mappings': self.bag_to_region_mapping.copy()
+        }
     
     def get_bag_pallet_status(self) -> Dict[str, Any]:
         """
@@ -479,7 +529,8 @@ class RegionDivisionPLCIntegration:
             'bag_pallet_1': self.bag_pallet_1,
             'bag_pallet_2': self.bag_pallet_2,
             'current_regions': {},
-            'active_regions_count': 0
+            'active_regions_count': 0,
+            'current_bag_info': self.get_current_bag_info()  # ⭐ NEW: Add bag info ⭐
         }
         
         for region_name, region_data in self.current_region_data.items():
@@ -488,7 +539,9 @@ class RegionDivisionPLCIntegration:
                     'pallet_id': region_data.get('pallet_id'),
                     'region_id': region_data.get('region_id'), 
                     'robot_coords': region_data.get('robot_coordinates'),
-                    'pixel_center': region_data.get('pixel_center')
+                    'pixel_center': region_data.get('pixel_center'),
+                    'bag_number': region_data.get('bag_number'),  # ⭐ NEW: Add bag info ⭐
+                    'sequence_mapping': region_data.get('sequence_mapping')  # ⭐ NEW: Add mapping info ⭐
                 }
                 status['active_regions_count'] += 1
             else:

@@ -949,6 +949,8 @@ def demo_camera():
                     print("'s': Show sequence status")
                     print("'x': Reset sequence (demo only)")
                     print("'z': Show depth info")
+                    print("'1'/'2'/'3': Set bag number (bao 1/2/3) - Changes target region")
+                    print("'b': Show current bag info")
                     print()
                     print("=== PLC INTEGRATION ===")
                     print(f"PLC Status: {'🟢 ENABLED' if enable_plc else '🔴 DISABLED'}")
@@ -1047,6 +1049,11 @@ def demo_camera():
                                     print(f"      bag_pallet_2 = {bag_status['bag_pallet_2']}")
                                     print(f"      Active regions: {bag_status['active_regions_count']}")
                                     
+                                    # ⭐ SHOW CURRENT BAG MAPPING ⭐
+                                    current_bag_info = bag_status.get('current_bag_info', {})
+                                    if current_bag_info:
+                                        print(f"   🎯 CURRENT BAG: {current_bag_info['sequence_mapping']}")
+                                    
                                     # Show regions
                                     for region_name, region_data in bag_status['current_regions'].items():
                                         if region_data:
@@ -1084,6 +1091,11 @@ def demo_camera():
                             print(f"      bag_pallet_1 = {bag_status['bag_pallet_1']}")
                             print(f"      bag_pallet_2 = {bag_status['bag_pallet_2']}")
                             print(f"      Active regions: {bag_status['active_regions_count']}")
+                            
+                            # ⭐ SHOW CURRENT BAG MAPPING ⭐
+                            current_bag_info = bag_status.get('current_bag_info', {})
+                            if current_bag_info:
+                                print(f"   🎯 CURRENT BAG: {current_bag_info['sequence_mapping']}")
                             
                             # ⭐ SHOW DETAILED REGION DATA ⭐
                             for region_name, region_data in bag_status['current_regions'].items():
@@ -1124,6 +1136,58 @@ def demo_camera():
                         print(f"📝 [LOGGING] Restored to: {status}")
                         print("📝 [TIP] 'l' = toggle logging | 'h' = help | 'n' = clean PLC debug")
                         print("="*60)
+                
+                # ⭐ BAG CONTROL HANDLERS ⭐
+                elif key == ord('1'):
+                    # Set bag 1
+                    print("\n🎯 [BAG CONTROL] Setting bag number 1...")
+                    if enable_plc:
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration:
+                            plc_integration.set_current_bag_number(1)
+                            bag_info = plc_integration.get_current_bag_info()
+                            print(f"   ✅ {bag_info['sequence_mapping']}")
+                    else:
+                        print("   ⚠️ PLC disabled, bag control not available")
+                        
+                elif key == ord('2'):
+                    # Set bag 2
+                    print("\n🎯 [BAG CONTROL] Setting bag number 2...")
+                    if enable_plc:
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration:
+                            plc_integration.set_current_bag_number(2)
+                            bag_info = plc_integration.get_current_bag_info()
+                            print(f"   ✅ {bag_info['sequence_mapping']}")
+                    else:
+                        print("   ⚠️ PLC disabled, bag control not available")
+                        
+                elif key == ord('3'):
+                    # Set bag 3
+                    print("\n🎯 [BAG CONTROL] Setting bag number 3...")
+                    if enable_plc:
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration:
+                            plc_integration.set_current_bag_number(3)
+                            bag_info = plc_integration.get_current_bag_info()
+                            print(f"   ✅ {bag_info['sequence_mapping']}")
+                    else:
+                        print("   ⚠️ PLC disabled, bag control not available")
+                        
+                elif key == ord('b'):
+                    # Show current bag info
+                    print("\n🎯 [BAG INFO] Current bag configuration:")
+                    if enable_plc:
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration:
+                            bag_info = plc_integration.get_current_bag_info()
+                            print(f"   Current: {bag_info['sequence_mapping']}")
+                            print(f"   All mappings:")
+                            for bag_num, region_id in bag_info['all_mappings'].items():
+                                marker = "→" if bag_num == bag_info['current_bag_number'] else " "
+                                print(f"     {marker} bao {bag_num} → R{region_id}")
+                    else:
+                        print("   ⚠️ PLC disabled, bag info not available")
                 
         except KeyboardInterrupt:
             pass

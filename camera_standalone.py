@@ -774,6 +774,15 @@ def demo_camera():
                     coords_text = f"Robot Coords: {len(robot_coords)}"
                     cv2.putText(display_frame, coords_text, (10, 150), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    
+                    # ⭐ UPDATE DETECTION CONTEXT FOR SAVED POSITIONS ⭐
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                plc_integration.update_detection_context(detections)
+                        except Exception as e:
+                            pass  # Silent fail để không spam console
                 
                 # ⭐ ENHANCED: SEQUENCER PROGRESS INDICATOR (GIAIPHAP34) ⭐
                 sequencer_status = detections.get('sequencer_status')
@@ -1304,7 +1313,19 @@ def demo_camera():
                         try:
                             plc_integration = pipeline.get_plc_integration()
                             if plc_integration:
-                                success = plc_integration.save_current_positions()
+                                # ⭐ GET LATEST DETECTION DATA ⭐
+                                detection_result = pipeline.get_latest_detection(timeout=0.1)
+                                detection_data = None
+                                
+                                if detection_result:
+                                    frame, detections = detection_result
+                                    detection_data = detections
+                                    print(f"   📋 Found detection data with {len(detections.get('robot_coordinates', []))} robot coordinates")
+                                else:
+                                    print("   ⚠️ No current detection data available")
+                                
+                                # Save positions with detection data
+                                success = plc_integration.save_current_positions(detection_data)
                                 if success:
                                     print("   ✅ Positions saved successfully!")
                                     # Show saved positions status

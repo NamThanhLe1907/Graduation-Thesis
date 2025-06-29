@@ -95,6 +95,9 @@ class RegionDivisionPLCIntegration:
         # Auto-load saved positions if file exists
         self.load_saved_positions()
         
+        # ⭐ DETECTION CONTEXT STORAGE ⭐
+        self._detections_context = None  # Store latest detection data for position saving
+        
         if self.debug:
             print(f"[RegionPLC] Khởi tạo với PLC: {plc_ip}:{plc_rack}:{plc_slot}")
             print(f"[RegionPLC] DB26 Memory Layout (Updated):")
@@ -329,81 +332,70 @@ class RegionDivisionPLCIntegration:
     
     def send_regions_to_plc(self, regions_data: List[Dict] = None) -> bool:
         """
-        Gửi tọa độ robot của các regions vào PLC DB26 theo BAG PALLET TRACKING
+        Gửi tọa độ robot của loads region vào PLC DB26 - CHỈ LOADS
         
         Args:
             regions_data: DEPRECATED - Không sử dụng, chỉ để backward compatibility
             
         Returns:
-            bool: True nếu gửi thành công tất cả regions
+            bool: True nếu gửi thành công loads region
         """
         if not self.plc_connected:
             if self.debug:
                 print(f"[RegionPLC] ❌ PLC chưa kết nối, bỏ qua gửi dữ liệu")
             return False
         
-        # ⭐ SỬ DỤNG BAG PALLET TRACKING THAY VÌ regions_data ⭐
-        regions_to_send = []
+        # ⭐ CHỈ GỬI LOADS REGION THEO YÊU CẦU USER ⭐
+        loads_data = self.current_region_data.get('loads')
         
-        # Chỉ gửi các region có dữ liệu thực tế
-        for region_name, region_data in self.current_region_data.items():
-            if region_data is not None:
-                regions_to_send.append((region_name, region_data))
-        
-        if not regions_to_send:
+        if not loads_data:
             if self.debug:
-                print(f"[RegionPLC] Không có region data để gửi (current_region_data trống)")
+                print(f"[RegionPLC] Không có loads region data để gửi")
             return False
         
         if self.debug:
-            print(f"[RegionPLC] Đang gửi {len(regions_to_send)} regions vào PLC theo BAG PALLET TRACKING...")
-            print(f"  📦 bag_pallet_1={self.bag_pallet_1}, bag_pallet_2={self.bag_pallet_2}")
+            print(f"[RegionPLC] Đang gửi LOADS REGION vào PLC...")
+            print(f"  📦 Chỉ gửi loads region (theo yêu cầu user)")
         
         success_count = 0
         total_writes = 0
         
-        # Gửi tọa độ theo từng region riêng biệt
-        for region_name, region_data in regions_to_send:
-            if region_name in self.db26_offsets:
-                offsets = self.db26_offsets[region_name]
-                robot_coords = region_data['robot_coordinates']
-                region_info = region_data
-                
-                px = robot_coords['px']
-                py = robot_coords['py']
-                
-                # Ghi Px
-                px_success = self.plc_comm.write_db26_real(offsets['px'], px)
-                total_writes += 1
-                if px_success:
-                    success_count += 1
-                
-                # Ghi Py
-                py_success = self.plc_comm.write_db26_real(offsets['py'], py)
-                total_writes += 1
-                if py_success:
-                    success_count += 1
-                
-                if self.debug:
-                    px_status = "✅" if px_success else "❌"
-                    py_status = "✅" if py_success else "❌"
-                    pallet_id = region_info.get('pallet_id', '?')
-                    region_id = region_info.get('region_id', '?')
-                    
-                    print(f"  [{region_name}] P{pallet_id}R{region_id}: {px_status} Px={px:7.2f} (DB26.{offsets['px']}), "
-                          f"{py_status} Py={py:7.2f} (DB26.{offsets['py']})")
-            else:
-                if self.debug:
-                    print(f"  ⚠️  Bỏ qua region không có offset: {region_name}")
+        # Gửi tọa độ loads region
+        region_name = 'loads'
+        offsets = self.db26_offsets[region_name]
+        robot_coords = loads_data['robot_coordinates']
+        
+        px = robot_coords['px']
+        py = robot_coords['py']
+        
+        # Ghi Px
+        px_success = self.plc_comm.write_db26_real(offsets['px'], px)
+        total_writes += 1
+        if px_success:
+            success_count += 1
+        
+        # Ghi Py
+        py_success = self.plc_comm.write_db26_real(offsets['py'], py)
+        total_writes += 1
+        if py_success:
+            success_count += 1
+        
+        if self.debug:
+            px_status = "✅" if px_success else "❌"
+            py_status = "✅" if py_success else "❌"
+            region_id = loads_data.get('region_id', '?')
+            
+            print(f"  [loads] R{region_id}: {px_status} Px={px:7.2f} (DB26.{offsets['px']}), "
+                  f"{py_status} Py={py:7.2f} (DB26.{offsets['py']})")
         
         # Thành công nếu tất cả writes đều OK
         all_success = success_count == total_writes
         
         if self.debug:
             if all_success:
-                print(f"[RegionPLC] ✅ Đã gửi thành công tất cả {total_writes} giá trị vào PLC")
+                print(f"[RegionPLC] ✅ Đã gửi thành công loads region vào PLC")
             else:
-                print(f"[RegionPLC] ❌ Chỉ gửi thành công {success_count}/{total_writes} giá trị")
+                print(f"[RegionPLC] ❌ Lỗi gửi loads region: {success_count}/{total_writes} giá trị")
         
         return all_success
     
@@ -420,15 +412,25 @@ class RegionDivisionPLCIntegration:
         plc_data = {}
         
         for region_name, offsets in self.db26_offsets.items():
-            px = self.plc_comm.read_db26_real(offsets['px'])
-            py = self.plc_comm.read_db26_real(offsets['py'])
-            
-            plc_data[region_name] = {
-                'px': px,
-                'py': py,
-                'px_offset': offsets['px'],
-                'py_offset': offsets['py']
-            }
+            # ⭐ SKIP BAG_NUMBER REGION - nó không có px/py ⭐
+            if region_name == 'bag_number':
+                # Đọc bag_number từ PLC
+                bag_number_value = self.plc_comm.read_db26_int(offsets['offset'])
+                plc_data[region_name] = {
+                    'bag_number': bag_number_value,
+                    'offset': offsets['offset']
+                }
+            else:
+                # Đọc px/py cho các region khác
+                px = self.plc_comm.read_db26_real(offsets['px'])
+                py = self.plc_comm.read_db26_real(offsets['py'])
+                
+                plc_data[region_name] = {
+                    'px': px,
+                    'py': py,
+                    'px_offset': offsets['px'],
+                    'py_offset': offsets['py']
+                }
         
         return plc_data
     
@@ -620,7 +622,7 @@ class RegionDivisionPLCIntegration:
     
     def _populate_loads_from_source_data(self, source_data: List[Dict], data_source: str) -> bool:
         """
-        ⭐ NEW: Populate loads từ source_data với IMPROVED detection logic ⭐
+        ⭐ NEW: Populate loads từ source_data - CHỈ TỪ LOADS REGION ⭐
         
         Args:
             source_data: Depth results or pallet regions
@@ -629,10 +631,10 @@ class RegionDivisionPLCIntegration:
         Returns:
             bool: True if loads was found and populated
         """
-        print(f"\n[RegionPLC] 📦 POPULATING LOADS REGION from {data_source}...")
+        print(f"\n[RegionPLC] 📦 POPULATING LOADS REGION from {data_source} (LOADS REGION ONLY)...")
         print(f"[RegionPLC] 📋 source_data count: {len(source_data)}")
         
-        # ⭐ IMPROVED LOAD DETECTION LOGIC ⭐
+        # ⭐ ENHANCED LOAD DETECTION LOGIC - CHỈ TỪ LOADS REGION ⭐
         for i, region_data in enumerate(source_data):
             region_info = region_data.get('region_info', {})
             object_class = region_info.get('object_class', '')
@@ -644,31 +646,12 @@ class RegionDivisionPLCIntegration:
             
             print(f"  Region {i}: object_class='{object_class}', pallet_id={pallet_id}")
             
-            # ⭐ LOGIC 1: Non-pallet objects (pallet_id = 0) ⭐
+            # ⭐ CHỈ XỬ LÝ NON-PALLET OBJECTS (pallet_id = 0) ⭐
             if pallet_id == 0 and object_class in ['load', 'load2', '0.0', '1.0', 0.0, 1.0]:
-                # Extract coordinates với robot transform + region offsets
-                robot_x, robot_y = self._extract_robot_coordinates_from_region(region_data, data_source)
-                
-                self.current_region_data['loads'] = {
-                    'region_id': 1,  # Default loads region ID
-                    'pallet_id': 1,  # Default loads pallet ID for PLC
-                    'robot_coordinates': {'px': robot_x, 'py': robot_y},
-                    'pixel_center': region_data.get('center', [0, 0]),
-                    'class': object_class,
-                    'bag_number': self.current_bag_number,
-                    'sequence_mapping': f"loads → {object_class} detection",
-                    'coordinate_source': f'{data_source}_load_{object_class}',
-                    'depth_info': region_data.get('position', {}),
-                    'depth_value': region_data.get('position', {}).get('z', 0.0)  # Depth từ depth module
-                }
-                
-                print(f"    ✅ FOUND {object_class} (pallet_id=0) for loads: robot=({robot_x:.2f}, {robot_y:.2f})")
-                return True
-            
-            # ⭐ LOGIC 2: Load objects được assigned vào loads region thông qua RegionManager ⭐
-            elif object_class in ['load', 'load2', '0.0', '1.0', 0.0, 1.0]:
                 # Kiểm tra xem object có nằm trong loads region không
                 center = region_data.get('center', [0, 0])
+                
+                # ⭐ QUAN TRỌNG: CHỈ LẤY LOADS TỪ LOADS REGION ⭐
                 if self.region_manager.is_point_in_region((center[0], center[1]), 'loads'):
                     # Extract coordinates với robot transform + region offsets
                     robot_x, robot_y = self._extract_robot_coordinates_from_region(region_data, data_source)
@@ -677,38 +660,42 @@ class RegionDivisionPLCIntegration:
                         'region_id': 1,  # Default loads region ID
                         'pallet_id': 1,  # Default loads pallet ID for PLC
                         'robot_coordinates': {'px': robot_x, 'py': robot_y},
-                        'pixel_center': center,
+                        'pixel_center': region_data.get('center', [0, 0]),
                         'class': object_class,
                         'bag_number': self.current_bag_number,
-                        'sequence_mapping': f"loads → {object_class} in loads region",
-                        'coordinate_source': f'{data_source}_loads_region_{object_class}',
+                        'sequence_mapping': f"loads → {object_class} detection",
+                        'coordinate_source': f'{data_source}_load_{object_class}',
                         'depth_info': region_data.get('position', {}),
                         'depth_value': region_data.get('position', {}).get('z', 0.0)  # Depth từ depth module
                     }
                     
-                    print(f"    ✅ FOUND {object_class} in loads region: robot=({robot_x:.2f}, {robot_y:.2f})")
+                    print(f"    ✅ FOUND {object_class} (pallet_id=0) IN LOADS REGION: robot=({robot_x:.2f}, {robot_y:.2f})")
                     return True
+                else:
+                    print(f"    ⚠️ SKIPPED {object_class} (pallet_id=0) NOT IN LOADS REGION: pixel=({center[0]:.1f}, {center[1]:.1f})")
         
-        print(f"    ❌ NO LOAD DETECTION found for loads region")
+        print(f"    ❌ NO LOAD DETECTION found IN LOADS REGION")
         return False
     
     def _populate_loads_from_robot_coordinates(self, robot_coordinates: List[Dict]):
         """
-        ⭐ NEW: Populate loads từ robot_coordinates (fallback) ⭐
+        ⭐ NEW: Populate loads từ robot_coordinates - CHỈ TỪ LOADS REGION ⭐
         
         Args:
             robot_coordinates: Robot coordinates từ pipeline
         """
-        print(f"\n[RegionPLC] 📦 POPULATING LOADS from robot_coordinates...")
+        print(f"\n[RegionPLC] 📦 POPULATING LOADS from robot_coordinates (LOADS REGION ONLY)...")
         print(f"[RegionPLC] 📋 robot_coordinates count: {len(robot_coordinates)}")
         
-        # Tìm load detection từ robot_coordinates
+        # Tìm load detection từ robot_coordinates - CHỈ TỪ LOADS REGION
         load_classes = ['load', 'load2']
         for i, coord in enumerate(robot_coordinates):
             coord_class = coord.get('class', '')
-            print(f"  Coord {i}: {coord_class}")
+            assigned_region = coord.get('assigned_region', '')
+            print(f"  Coord {i}: {coord_class} in region '{assigned_region}'")
             
-            if coord_class in load_classes:
+            # ⭐ QUAN TRỌNG: CHỈ LẤY LOADS TỪ LOADS REGION ⭐
+            if coord_class in load_classes and assigned_region == 'loads':
                 robot_pos = coord['robot_coordinates']
                 
                 self.current_region_data['loads'] = {
@@ -725,10 +712,12 @@ class RegionDivisionPLCIntegration:
                     'coordinate_source': f'robot_coordinates_load_{coord_class}'
                 }
                 
-                print(f"    ✅ FOUND {coord_class} detection for loads: robot=({robot_pos['x']:.2f}, {robot_pos['y']:.2f})")
-                return  # Exit after finding first load
+                print(f"    ✅ FOUND {coord_class} IN LOADS REGION: robot=({robot_pos['x']:.2f}, {robot_pos['y']:.2f})")
+                return  # Exit after finding first load in loads region
+            elif coord_class in load_classes and assigned_region in ['pallets1', 'pallets2']:
+                print(f"    ⚠️ SKIPPED {coord_class} in {assigned_region} (not in loads region)")
         
-        print(f"    ❌ NO LOAD DETECTION found in robot_coordinates")
+        print(f"    ❌ NO LOAD DETECTION found IN LOADS REGION")
     
     def set_current_bag_number(self, bag_number: int, send_to_plc: bool = True):
         """
@@ -1157,8 +1146,8 @@ class RegionDivisionPLCIntegration:
                 offset = self.region_manager.regions[region_name]['offset']
                 final_robot_x = raw_robot_x + offset['x']
                 final_robot_y = raw_robot_y + offset['y']
-                
-                if self.debug:
+            
+            if self.debug:
                     print(f"      Using position + robot_transform + {region_name} offset:")
                     print(f"        pixel=({pixel_x:.1f}, {pixel_y:.1f}), depth={depth_z:.3f}m")
                     print(f"        raw_robot=({raw_robot_x:.2f}, {raw_robot_y:.2f})")
@@ -1187,8 +1176,8 @@ class RegionDivisionPLCIntegration:
                 offset = self.region_manager.regions[region_name]['offset']
                 final_robot_x = raw_robot_x + offset['x']
                 final_robot_y = raw_robot_y + offset['y']
-                
-                if self.debug:
+            
+            if self.debug:
                     print(f"      Fallback center + robot_transform + {region_name} offset:")
                     print(f"        pixel=({pixel_x:.1f}, {pixel_y:.1f})")
                     print(f"        raw_robot=({raw_robot_x:.2f}, {raw_robot_y:.2f})")
@@ -1238,46 +1227,59 @@ class RegionDivisionPLCIntegration:
 
     # ⭐ SAVED POSITIONS MANAGEMENT METHODS ⭐
     
-    def save_current_positions(self):
+    def save_current_positions(self, detections: Dict = None):
         """
         💾 Save current detected positions as confirmed drop positions
+        
+        Args:
+            detections: Optional detection data to extract positions from
         """
-        if not self.current_region_data:
-            print("[RegionPLC] ❌ No current region data to save!")
-            return False
-        
-        saved_count = 0
-        
         # Get current target region ID for the bag
         target_region_id = self.bag_sequence_mapping.get(self.current_bag_number, 1)
         
         print(f"\n[RegionPLC] 💾 SAVING POSITIONS for bag {self.current_bag_number} (target region R{target_region_id})...")
         
-        # Save pallets1 position (P1R{target_region_id})
-        if self.current_region_data.get('pallets1'):
-            position_key = f"P1R{target_region_id}"
-            position_data = self.current_region_data['pallets1'].copy()
-            position_data['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            position_data['confirmed'] = True
-            
-            self.saved_positions[position_key] = position_data
-            
-            robot_coords = position_data['robot_coordinates']
-            print(f"  ✅ {position_key}: Px={robot_coords['px']:.2f}, Py={robot_coords['py']:.2f}")
-            saved_count += 1
+        saved_count = 0
         
-        # Save pallets2 position (P2R{target_region_id})
-        if self.current_region_data.get('pallets2'):
-            position_key = f"P2R{target_region_id}"
-            position_data = self.current_region_data['pallets2'].copy()
-            position_data['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            position_data['confirmed'] = True
+        # ⭐ SOURCE 1: Try current_region_data first ⭐
+        if self.current_region_data:
+            print(f"[RegionPLC] 📋 Using current_region_data...")
             
-            self.saved_positions[position_key] = position_data
+            # Save pallets1 position (P1R{target_region_id})
+            if self.current_region_data.get('pallets1'):
+                position_key = f"P1R{target_region_id}"
+                position_data = self.current_region_data['pallets1'].copy()
+                position_data['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                position_data['confirmed'] = True
+                
+                self.saved_positions[position_key] = position_data
+                
+                robot_coords = position_data['robot_coordinates']
+                print(f"  ✅ {position_key}: Px={robot_coords['px']:.2f}, Py={robot_coords['py']:.2f}")
+                saved_count += 1
             
-            robot_coords = position_data['robot_coordinates']
-            print(f"  ✅ {position_key}: Px={robot_coords['px']:.2f}, Py={robot_coords['py']:.2f}")
-            saved_count += 1
+            # Save pallets2 position (P2R{target_region_id})
+            if self.current_region_data.get('pallets2'):
+                position_key = f"P2R{target_region_id}"
+                position_data = self.current_region_data['pallets2'].copy()
+                position_data['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                position_data['confirmed'] = True
+                
+                self.saved_positions[position_key] = position_data
+                
+                robot_coords = position_data['robot_coordinates']
+                print(f"  ✅ {position_key}: Px={robot_coords['px']:.2f}, Py={robot_coords['py']:.2f}")
+                saved_count += 1
+        
+        # ⭐ SOURCE 2: Try extracting from detection data (fallback) ⭐
+        elif detections:
+            print(f"[RegionPLC] 📋 Fallback: Extracting from detection data...")
+            saved_count = self._save_positions_from_detections(detections, target_region_id)
+        
+        # ⭐ SOURCE 3: Last resort - use stored detections context ⭐
+        elif hasattr(self, '_detections_context') and self._detections_context:
+            print(f"[RegionPLC] 📋 Last resort: Using stored detection context...")
+            saved_count = self._save_positions_from_detections(self._detections_context, target_region_id)
         
         if saved_count > 0:
             # Save to file
@@ -1288,8 +1290,105 @@ class RegionDivisionPLCIntegration:
                 print(f"[RegionPLC] ❌ Failed to save positions to file")
                 return False
         else:
-            print(f"[RegionPLC] ⚠️ No positions available to save")
+            print(f"[RegionPLC] ⚠️ No positions available to save for target region R{target_region_id}")
+            print(f"[RegionPLC] 💡 Try running detection first with 'n' or ensure pallets are detected")
             return False
+    
+    def _save_positions_from_detections(self, detections: Dict, target_region_id: int) -> int:
+        """
+        💾 Extract and save positions from detection data
+        
+        Args:
+            detections: Detection data from pipeline
+            target_region_id: Target region ID for current bag
+            
+        Returns:
+            int: Number of positions saved
+        """
+        saved_count = 0
+        
+        # ⭐ EXTRACT FROM ROBOT COORDINATES ⭐
+        robot_coords = detections.get('robot_coordinates', [])
+        print(f"[RegionPLC] 📋 Found {len(robot_coords)} robot coordinates")
+        
+        if robot_coords:
+            # Debug: show all robot coordinates
+            for i, coord in enumerate(robot_coords):
+                region = coord.get('assigned_region', 'unknown')
+                class_name = coord.get('class', 'unknown')
+                robot_pos = coord.get('robot_coordinates', {})
+                print(f"  Robot coord {i}: {class_name} in {region} → X={robot_pos.get('x', 0):.2f}, Y={robot_pos.get('y', 0):.2f}")
+            
+            # Find pallets1 and pallets2 coordinates
+            pallets1_coord = None
+            pallets2_coord = None
+            
+            for coord in robot_coords:
+                region = coord.get('assigned_region', '')
+                class_name = coord.get('class', '')
+                
+                if region == 'pallets1' and 'pallet' in class_name:
+                    pallets1_coord = coord
+                elif region == 'pallets2' and 'pallet' in class_name:
+                    pallets2_coord = coord
+            
+            # Save P1R{target_region_id} from pallets1
+            if pallets1_coord:
+                position_key = f"P1R{target_region_id}"
+                robot_pos = pallets1_coord['robot_coordinates']
+                
+                position_data = {
+                    'region_id': target_region_id,
+                    'pallet_id': 1,
+                    'robot_coordinates': {'px': robot_pos['x'], 'py': robot_pos['y']},
+                    'pixel_center': [pallets1_coord.get('camera_pixel', {}).get('x', 0), pallets1_coord.get('camera_pixel', {}).get('y', 0)],
+                    'class': 'pallet',
+                    'bag_number': self.current_bag_number,
+                    'sequence_mapping': f"bao {self.current_bag_number} → P1R{target_region_id}",
+                    'coordinate_source': 'robot_coordinates_direct',
+                    'saved_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'confirmed': True
+                }
+                
+                self.saved_positions[position_key] = position_data
+                print(f"  ✅ {position_key}: Px={robot_pos['x']:.2f}, Py={robot_pos['y']:.2f}")
+                saved_count += 1
+            
+            # Save P2R{target_region_id} from pallets2
+            if pallets2_coord:
+                position_key = f"P2R{target_region_id}"
+                robot_pos = pallets2_coord['robot_coordinates']
+                
+                position_data = {
+                    'region_id': target_region_id,
+                    'pallet_id': 2,
+                    'robot_coordinates': {'px': robot_pos['x'], 'py': robot_pos['y']},
+                    'pixel_center': [pallets2_coord.get('camera_pixel', {}).get('x', 0), pallets2_coord.get('camera_pixel', {}).get('y', 0)],
+                    'class': 'pallet',
+                    'bag_number': self.current_bag_number,
+                    'sequence_mapping': f"bao {self.current_bag_number} → P2R{target_region_id}",
+                    'coordinate_source': 'robot_coordinates_direct',
+                    'saved_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'confirmed': True
+                }
+                
+                self.saved_positions[position_key] = position_data
+                print(f"  ✅ {position_key}: Px={robot_pos['x']:.2f}, Py={robot_pos['y']:.2f}")
+                saved_count += 1
+        
+        return saved_count
+    
+    def update_detection_context(self, detections: Dict):
+        """
+        🔄 Store latest detection data for position saving
+        
+        Args:
+            detections: Latest detection data from pipeline
+        """
+        self._detections_context = detections
+        if self.debug:
+            robot_coords = detections.get('robot_coordinates', [])
+            print(f"[RegionPLC] 🔄 Updated detection context: {len(robot_coords)} robot coordinates")
     
     def send_saved_position_to_plc(self, position_key: str) -> bool:
         """

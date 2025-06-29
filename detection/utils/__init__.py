@@ -8,3 +8,5 @@ from .tensorrt_yolo import *
 from .module_division import *
 from .camera_calibration import *
 from .robot_coordinate_transform import *
+from .region_manager import *
+from .region_sequencer import *

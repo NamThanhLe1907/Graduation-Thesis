@@ -282,6 +282,169 @@ class DB26Communication(PLCCommunication):
     def write_db26_real(self, byte_offset: int, value: float) -> bool:
         """Ghi REAL vào DB26"""
         return self.write_real(self.db_number, byte_offset, value)
+    
+    # ⭐ SEQUENTIAL REGION METHODS - ADDED FOR PLAN IMPLEMENTATION ⭐
+    
+    def send_single_region_to_plc(self, region_data: dict, region_index: int) -> bool:
+        """
+        Gửi 1 region duy nhất với X,Y,Z tới PLC.
+        
+        Args:
+            region_data: Dict chứa region data với coordinates
+            region_index: Index của region (0, 1, 2 cho regions 1, 2, 3)
+            
+        Returns:
+            bool: True nếu thành công
+        """
+        try:
+            # NEW DB26 Layout with Z coordinates (12 bytes per region)
+            # Region 1: DB26.0 (X), DB26.4 (Y), DB26.8 (Z)    [12 bytes]
+            # Region 2: DB26.12 (X), DB26.16 (Y), DB26.20 (Z)  [12 bytes] 
+            # Region 3: DB26.24 (X), DB26.28 (Y), DB26.32 (Z)  [12 bytes]
+            offsets_xyz = [
+                {'px': 0, 'py': 4, 'pz': 8},       # Region 1
+                {'px': 12, 'py': 16, 'pz': 20},    # Region 2  
+                {'px': 24, 'py': 28, 'pz': 32}     # Region 3
+            ]
+            
+            if not (0 <= region_index < len(offsets_xyz)):
+                logger.error(f"Invalid region_index {region_index}. Must be 0, 1, or 2")
+                return False
+            
+            offsets = offsets_xyz[region_index]
+            
+            # Extract coordinates từ region_data
+            target_coords = region_data.get('target_coordinates', {})
+            px = target_coords.get('px', 0.0)
+            py = target_coords.get('py', 0.0) 
+            pz = target_coords.get('pz', 0.0)
+            
+            # Write X, Y, Z coordinates
+            px_success = self.write_db26_real(offsets['px'], px)
+            py_success = self.write_db26_real(offsets['py'], py)
+            pz_success = self.write_db26_real(offsets['pz'], pz)
+            
+            if px_success and py_success and pz_success:
+                region_info = region_data.get('region_info', {})
+                region_id = region_info.get('region_id', region_index + 1)
+                pallet_id = region_info.get('pallet_id', 1)
+                
+                logger.info(f"[PLC] ✅ Sent P{pallet_id}R{region_id} → DB26.{offsets['px']}/{offsets['py']}/{offsets['pz']}: Px={px:.2f}, Py={py:.2f}, Pz={pz:.2f}")
+                return True
+            else:
+                logger.error(f"[PLC] ❌ Failed to write coordinates for region {region_index + 1}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[PLC] Error sending single region: {e}")
+            return False
+    
+    def send_next_region_in_sequence(self, sequencer) -> bool:
+        """
+        Gửi region tiếp theo theo sequence [1, 3, 2] sử dụng RegionSequencer.
+        
+        Args:
+            sequencer: RegionSequencer instance
+            
+        Returns:
+            bool: True nếu thành công
+        """
+        try:
+            next_region = sequencer.get_next_region()
+            
+            if next_region is None:
+                logger.warning("[PLC] No more regions in sequence")
+                return False
+            
+            region_info = next_region.get('region_info', {})
+            region_id = region_info.get('region_id', 1)
+            
+            # Map region_id to region_index (1->0, 2->1, 3->2)
+            region_index = region_id - 1
+            
+            success = self.send_single_region_to_plc(next_region, region_index)
+            
+            if success:
+                logger.info(f"[PLC] ✅ Successfully sent region {region_id} in sequence")
+            else:
+                logger.error(f"[PLC] ❌ Failed to send region {region_id} in sequence")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"[PLC] Error in sequence sending: {e}")
+            return False
+    
+    def robot_completed_current_region(self, sequencer) -> bool:
+        """
+        Signal từ robot rằng đã hoàn thành region hiện tại.
+        Progress to next region in sequence.
+        
+        Args:
+            sequencer: RegionSequencer instance
+            
+        Returns:
+            bool: True nếu có region tiếp theo, False nếu sequence hoàn thành
+        """
+        try:
+            # Mark current region as completed
+            sequencer.mark_region_completed()
+            
+            # Check if sequence is completed
+            if sequencer.is_sequence_completed():
+                logger.info("[PLC] ✅ All regions in sequence completed!")
+                return False
+            else:
+                logger.info("[PLC] ⏳ Ready for next region in sequence")
+                return True
+                
+        except Exception as e:
+            logger.error(f"[PLC] Error marking region completed: {e}")
+            return False
+    
+    def send_region_coordinates_xyz(self, px: float, py: float, pz: float, region_id: int) -> bool:
+        """
+        Gửi coordinates X,Y,Z cho region cụ thể.
+        
+        Args:
+            px: X coordinate (robot)
+            py: Y coordinate (robot)
+            pz: Z coordinate (robot)  
+            region_id: ID của region (1, 2, 3)
+            
+        Returns:
+            bool: True nếu thành công
+        """
+        try:
+            offsets_xyz = [
+                {'px': 0, 'py': 4, 'pz': 8},       # Region 1
+                {'px': 12, 'py': 16, 'pz': 20},    # Region 2  
+                {'px': 24, 'py': 28, 'pz': 32}     # Region 3
+            ]
+            
+            region_index = region_id - 1  # 1,2,3 -> 0,1,2
+            
+            if not (0 <= region_index < len(offsets_xyz)):
+                logger.error(f"Invalid region_id {region_id}. Must be 1, 2, or 3")
+                return False
+            
+            offsets = offsets_xyz[region_index]
+            
+            # Write X, Y, Z coordinates
+            px_success = self.write_db26_real(offsets['px'], px)
+            py_success = self.write_db26_real(offsets['py'], py)
+            pz_success = self.write_db26_real(offsets['pz'], pz)
+            
+            if px_success and py_success and pz_success:
+                logger.info(f"[PLC] ✅ Sent R{region_id} → DB26.{offsets['px']}/{offsets['py']}/{offsets['pz']}: Px={px:.2f}, Py={py:.2f}, Pz={pz:.2f}")
+                return True
+            else:
+                logger.error(f"[PLC] ❌ Failed to write coordinates for region {region_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[PLC] Error sending coordinates: {e}")
+            return False
 
 def test_connection():
     """

@@ -582,6 +582,12 @@ class ModuleDivision:
         try:
             regions = divided_result.get('divided_regions', [])
             
+            # ⭐ DEBUG: Log input và processing ⭐
+            if self.debug:
+                print(f"[ModuleDivision DEBUG] prepare_for_depth_estimation:")
+                print(f"  Input divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
+                print(f"  Input divided_result regions: {len(regions)}")
+            
             for region in regions:
                 depth_region = {
                     'bbox': region['bbox'],
@@ -606,11 +612,126 @@ class ModuleDivision:
                     depth_region['original_corners'] = region['original_corners']
                 
                 depth_regions.append(depth_region)
+                
+                # ⭐ DEBUG: Log từng region được tạo ⭐
+                if self.debug:
+                    region_info = depth_region['region_info']
+                    bbox = depth_region['bbox']
+                    has_corners = 'corners' in depth_region
+                    print(f"    Created region: P{region_info['pallet_id']}R{region_info['region_id']} bbox={[int(x) for x in bbox]} corners={has_corners}")
         
         except Exception as e:
             print(f"Lỗi khi chuẩn bị dữ liệu cho depth: {e}")
         
+        # ⭐ DEBUG: Log final output ⭐
+        if self.debug:
+            print(f"  Final output depth_regions: {len(depth_regions)}")
+        
         return depth_regions
+
+    # ⭐ SEQUENCE METHODS - ADDED FOR PLAN IMPLEMENTATION ⭐
+    
+    def get_regions_by_sequence(self, regions_data: List[Dict], pallet_id: int, 
+                               sequence: List[int] = [1, 3, 2]) -> List[Dict]:
+        """
+        Trích xuất regions theo thứ tự cụ thể cho một pallet.
+        
+        Args:
+            regions_data: List regions từ prepare_for_depth_estimation
+            pallet_id: ID của pallet cần lấy regions
+            sequence: Thứ tự regions cần lấy (default: [1, 3, 2])
+            
+        Returns:
+            List[Dict]: Danh sách regions theo thứ tự sequence
+        """
+        pallet_regions = [r for r in regions_data 
+                         if r.get('region_info', {}).get('pallet_id') == pallet_id]
+        
+        ordered_regions = []
+        for seq_id in sequence:
+            matching_region = self.get_specific_region(regions_data, pallet_id, seq_id)
+            if matching_region:
+                ordered_regions.append(matching_region)
+        
+        if self.debug:
+            print(f"[ModuleDivision] Pallet {pallet_id} sequence {sequence}: Found {len(ordered_regions)} regions")
+        
+        return ordered_regions
+    
+    def get_next_available_region(self, regions_data: List[Dict], pallet_id: int, 
+                                 sequence: List[int] = [1, 3, 2]) -> Optional[Dict]:
+        """
+        Lấy region tiếp theo có sẵn theo sequence cho một pallet.
+        
+        Args:
+            regions_data: List regions từ prepare_for_depth_estimation
+            pallet_id: ID của pallet
+            sequence: Thứ tự regions (default: [1, 3, 2])
+            
+        Returns:
+            Dict: Region tiếp theo hoặc None nếu không có
+        """
+        ordered_regions = self.get_regions_by_sequence(regions_data, pallet_id, sequence)
+        
+        # Trả về region đầu tiên có sẵn
+        if ordered_regions:
+            return ordered_regions[0]
+        
+        return None
+    
+    def get_specific_region(self, regions_data: List[Dict], pallet_id: int, region_id: int) -> Optional[Dict]:
+        """
+        Lấy region cụ thể bằng pallet_id và region_id.
+        
+        Args:
+            regions_data: List regions từ prepare_for_depth_estimation
+            pallet_id: ID của pallet
+            region_id: ID của region (1, 2, 3)
+            
+        Returns:
+            Dict: Region data hoặc None nếu không tìm thấy
+        """
+        for region in regions_data:
+            region_info = region.get('region_info', {})
+            if (region_info.get('pallet_id') == pallet_id and 
+                region_info.get('region_id') == region_id):
+                return region
+        
+        if self.debug:
+            print(f"[ModuleDivision] Không tìm thấy Pallet {pallet_id} Region {region_id}")
+        
+        return None
+    
+    def get_all_pallets_sequence(self, regions_data: List[Dict], 
+                                sequence: List[int] = [1, 3, 2]) -> Dict[int, List[Dict]]:
+        """
+        Lấy sequence cho tất cả pallets.
+        
+        Args:
+            regions_data: List regions từ prepare_for_depth_estimation
+            sequence: Thứ tự regions (default: [1, 3, 2])
+            
+        Returns:
+            Dict[pallet_id, List[regions]]: Mapping pallet_id -> ordered regions
+        """
+        # Tìm tất cả pallet IDs
+        pallet_ids = set()
+        for region in regions_data:
+            pallet_id = region.get('region_info', {}).get('pallet_id')
+            if pallet_id:
+                pallet_ids.add(pallet_id)
+        
+        # Lấy sequence cho từng pallet
+        result = {}
+        for pallet_id in sorted(pallet_ids):
+            result[pallet_id] = self.get_regions_by_sequence(regions_data, pallet_id, sequence)
+        
+        if self.debug:
+            print(f"[ModuleDivision] All pallets sequence: {len(result)} pallets found")
+            for pid, regions in result.items():
+                print(f"  Pallet {pid}: {len(regions)} regions in sequence {sequence}")
+        
+        return result
 
 
 # Để test module

@@ -7,6 +7,25 @@ import traceback
 import threading
 import queue
 from typing import Any, Callable,  Optional
+import numpy as np
+import cv2
+import logging
+import os
+from pathlib import Path
+import sys
+
+# Add the main directory to the path to import region_division_plc_integration
+current_dir = Path(__file__).parent
+main_dir = current_dir.parent
+sys.path.insert(0, str(main_dir))
+
+# ⭐ IMPORT REGION DIVISION PLC INTEGRATION ⭐
+try:
+    from region_division_plc_integration import RegionDivisionPLCIntegration
+    REGION_PLC_AVAILABLE = True
+except ImportError as e:
+    print(f"[Pipeline] Warning: Could not import RegionDivisionPLCIntegration: {e}")
+    REGION_PLC_AVAILABLE = False
 
 # ---------------------- CLASS QUẢN LÝ QUEUE ĐƠN GIẢN ----------------------
 class QueueManager:
@@ -151,7 +170,7 @@ def _capture_frames_worker(
         # Đảm bảo ready_event được set dù có lỗi
         if not ready_event.is_set():
             ready_event.set()
-            print(f"[Camera Process {mp.current_process().pid}] Đã đặt ready_event (finally)")
+            # print(f"[Camera Process {mp.current_process().pid}] Đã đặt ready_event (finally)")
 
 
 def _yolo_detection_worker(
@@ -194,6 +213,18 @@ def _yolo_detection_worker(
             from detection.utils.robot_coordinate_transform import RobotCoordinateTransform
             from detection.utils.camera_calibration import CameraCalibration
             
+            # Import RegionManager for region-based processing
+            from detection.utils.region_manager import RegionManager
+            
+            # ⭐ THÊM: Import PLC Communication cho Region Division ⭐
+            try:
+                from plc_communication import DB26Communication
+                plc_available = True
+                print(f"[YOLO Process] PLC Communication available")
+            except ImportError as e:
+                print(f"[YOLO Process] Warning: PLC Communication not available: {e}")
+                plc_available = False
+            
             # Import Theta4WithModuleDivision class
             try:
                 import sys
@@ -206,20 +237,58 @@ def _yolo_detection_worker(
                 
                 from theta4_with_module_division import Theta4WithModuleDivision
                 theta4_available = True
-                print(f"[YOLO Process] Theta4WithModuleDivision imported successfully")
+                # print(f"[YOLO Process] Theta4WithModuleDivision imported successfully")
             except ImportError as e:
-                print(f"[YOLO Process] Warning: Could not import Theta4WithModuleDivision: {e}")
+                # print(f"[YOLO Process] Warning: Could not import Theta4WithModuleDivision: {e}")
                 theta4_available = False
             
             yolo_model = yolo_factory()
             print(f"[YOLO Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(yolo_model).__name__}")
-            divider = ModuleDivision()
-            print(f"[YOLO Process] ModuleDivision đã được tạo, testing default value...")
+            divider = ModuleDivision(debug=True)
+            print(f"[YOLO Process] ModuleDivision đã được tạo với debug enabled")
             
             # Khởi tạo Robot Coordinate Transform và Camera Calibration
             robot_transformer = RobotCoordinateTransform()
             camera_calibration = CameraCalibration()
             print(f"[YOLO Process] Robot transformer và camera calibration đã được khởi tạo")
+            
+            # Khởi tạo RegionManager và load offset
+            region_manager = RegionManager(auto_load_offsets=True)
+            print(f"[YOLO Process] RegionManager đã được khởi tạo với {len(region_manager.regions)} regions")
+            
+            # Hiển thị offset đã load
+            for region_name, region_info in region_manager.regions.items():
+                offset = region_info['offset']
+                if offset['x'] != 0 or offset['y'] != 0:
+                    print(f"[YOLO Process] Region {region_name} offset: X={offset['x']}, Y={offset['y']}")
+                else:
+                    print(f"[YOLO Process] Region {region_name}: No offset (X=0, Y=0)")
+
+            # ⭐ THÊM: Khởi tạo PLC Communication cho Region Division ⭐
+            plc_comm = None
+            enable_plc_regions = os.environ.get('ENABLE_PLC_REGIONS', 'true').lower() in ('true', '1', 'yes')
+            # ⭐ FORCE ENABLE PLC cho testing với PLC thật ⭐ 
+            enable_plc_regions = True
+            plc_available = True
+            if enable_plc_regions and plc_available:
+                try:
+                    plc_ip = os.environ.get('PLC_IP', '192.168.0.1')
+                    plc_rack = int(os.environ.get('PLC_RACK', '0'))
+                    plc_slot = int(os.environ.get('PLC_SLOT', '1'))
+                    
+                    plc_comm = DB26Communication(plc_ip, plc_rack, plc_slot)
+                    
+                    if plc_comm.connect():
+                        print(f"[YOLO Process] ✅ PLC kết nối thành công: {plc_ip}:{plc_rack}:{plc_slot}")
+                        print(f"[YOLO Process] DB26 Layout: Region1(0,4), Region2(8,12), Region3(16,20)")
+                    else:
+                        print(f"[YOLO Process] ❌ PLC kết nối thất bại, tiếp tục mà không gửi PLC")
+                        plc_comm = None
+                except Exception as e:
+                    print(f"[YOLO Process] Warning: PLC initialization failed: {e}")
+                    plc_comm = None
+            else:
+                print(f"[YOLO Process] PLC Regions disabled (ENABLE_PLC_REGIONS=false)")
             
             # Khởi tạo Theta4 calculator nếu có thể
             theta4_calculator = None
@@ -242,20 +311,156 @@ def _yolo_detection_worker(
                         # Phát hiện đối tượng với YOLO
                         detections = yolo_model.detect(frame)
 
-                        print(f"[DEBUG YOLO] Raw detections:")
-                        print(f"  - Classes: {detections.get('classes', [])}")
-                        print(f"  - Bounding boxes count: {len(detections.get('bounding_boxes', []))}")
-                        print(f"  - Corners count: {len(detections.get('corners', []))}")
-                        print(f"  - Scores: {detections.get('scores', [])}")
+                        # ⭐ SỬ DỤNG REGION MANAGER ĐỂ FILTER DETECTIONS ⭐
+                        region_filtered = region_manager.filter_detections_by_regions(detections)
+                        
+                        # In thông tin regions
+                        # region_counts = {name: len(data['bounding_boxes']) for name, data in region_filtered['regions'].items()}
+                        # print(f"[REGION DEBUG] Detections by regions: {region_counts}")
+                        # print(f"[REGION DEBUG] Unassigned: {len(region_filtered['unassigned']['bounding_boxes'])}")
 
                         # LOGIC MỚI: Tách xử lý pallet và non-pallet
                         pallet_classes = [2.0]  # Chỉ class 2.0 (pallet) mới chia regions
-                        print(f"[PIPELINE DEBUG] Tách xử lý: pallet_classes = {pallet_classes}")
+                        # print(f"[PIPELINE DEBUG] Tách xử lý: pallet_classes = {pallet_classes}")
                         
                         # 1. XỬ LÝ PALLET (class 2.0): Chia thành regions nhỏ
                         divided_result = divider.process_pallet_detections(detections, layer=1, target_classes=pallet_classes)
                         pallet_depth_regions = divider.prepare_for_depth_estimation(divided_result)
-                        print(f"[PIPELINE DEBUG] Pallet regions: {len(pallet_depth_regions)}")
+                        
+                        # ⭐ DEBUG: Trace sequential logic input (mỗi 10 frames để dễ thấy) ⭐
+                        if detection_counter.value % 10 == 0:
+                            print(f"[SEQUENCE DEBUG] Sequential logic input:")
+                            print(f"  pallet_depth_regions count: {len(pallet_depth_regions)}")
+                            for i, region in enumerate(pallet_depth_regions):
+                                region_info = region.get('region_info', {})
+                                bbox = region.get('bbox', [])
+                                has_corners = 'corners' in region
+                                print(f"    Region {i}: P{region_info.get('pallet_id')}R{region_info.get('region_id')} bbox={[int(x) for x in bbox]} corners={has_corners}")
+                            print(f"  divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
+                            print(f"  divided_result total_regions: {divided_result.get('total_regions', 0)}")
+                            print(f"  divided_result error: {divided_result.get('processing_info', {}).get('error', 'None')}")
+
+                        # ⭐ SEQUENTIAL REGION SENDING WITH Z COORDINATES (PLAN IMPLEMENTATION) ⭐ 
+                        if plc_comm and len(pallet_depth_regions) > 0:
+                            try:
+                                # ⭐ IMPORT REGION SEQUENCER ⭐
+                                from detection.utils.region_sequencer import RegionSequencer
+                                
+                                # ⭐ NEW DB26 Layout with Z coordinates (12 bytes per region) ⭐
+                                # Region 1: DB26.0 (X), DB26.4 (Y), DB26.8 (Z)    [12 bytes]
+                                # Region 2: DB26.12 (X), DB26.16 (Y), DB26.20 (Z)  [12 bytes] 
+                                # Region 3: DB26.24 (X), DB26.28 (Y), DB26.32 (Z)  [12 bytes]
+                                db26_offsets_xyz = [
+                                    {'px': 0, 'py': 4, 'pz': 8},       # Region 1
+                                    {'px': 12, 'py': 16, 'pz': 20},    # Region 2  
+                                    {'px': 24, 'py': 28, 'pz': 32}     # Region 3
+                                ]
+                                
+                                # ⭐ INITIALIZE SEQUENCER ⭐
+                                # Sử dụng biến global thay vì self vì đây là worker function
+                                if '_region_sequencer' not in globals():
+                                    globals()['_region_sequencer'] = RegionSequencer(sequence=[1, 3, 2])
+                                
+                                # ⭐ DETECT LOAD CLASSES FOR TARGET PALLET MAPPING ⭐
+                                load_classes = [0.0, 1.0]  # class 0.0 (load) → Pallets1, class 1.0 (load2) → Pallets2
+                                has_loads = any(cls in load_classes for cls in detections.get('classes', []))
+                                
+                                # ⭐ DEBUG: Hiển thị classes để check mapping (mỗi 10 frames để dễ thấy) ⭐
+                                if detection_counter.value % 10 == 0:
+                                    detected_classes = detections.get('classes', [])
+                                    print(f"[SEQUENCE DEBUG][Frame {detection_counter.value}] Detected classes: {detected_classes}")
+                                    print(f"[SEQUENCE DEBUG][Frame {detection_counter.value}] Target load_classes: {load_classes}")
+                                    print(f"[SEQUENCE DEBUG][Frame {detection_counter.value}] has_loads: {has_loads}")
+                                
+                                if has_loads and len(pallet_depth_regions) > 0:
+                                    # ⭐ GET TARGET PALLET (assume Pallet1 for now, can be enhanced later) ⭐
+                                    target_pallet_id = 1
+                                    pallet_regions = [r for r in pallet_depth_regions 
+                                                    if r.get('region_info', {}).get('pallet_id') == target_pallet_id]
+                                    
+                                    if len(pallet_regions) > 0:
+                                        # ⭐ ADD TO SEQUENCER QUEUE ⭐
+                                        region_sequencer = globals()['_region_sequencer']
+                                        if region_sequencer.is_queue_empty():
+                                            region_sequencer.add_pallet_to_queue(pallet_regions, target_pallet_id)
+                                        
+                                        # ⭐ GET NEXT REGION IN SEQUENCE ⭐
+                                        next_region = region_sequencer.get_next_region()
+                                        
+                                        if next_region:
+                                            center_pixel = next_region['center']
+                                            region_info = next_region['region_info']
+                                            region_id = region_info['region_id']
+                                            
+                                            # ⭐ CHUYỂN ĐỔI PIXEL SANG ROBOT COORDINATES ⭐
+                                            robot_x, robot_y = robot_transformer.camera_to_robot(
+                                                center_pixel[0], center_pixel[1]
+                                            )
+                                            
+                                            # ⭐ EXTRACT Z COORDINATE FROM DEPTH MODEL ⭐
+                                            # TODO: Integrate depth results từ depth process để có Z coordinate thực tế
+                                            depth_results = None  # Temporary fix - depth results không available trong context này
+                                            robot_z = 2.0  # Default Z fallback (2 meters) cho sequential sending
+                                            if depth_results and 'robot_coordinate_results' in depth_results:
+                                                robot_coords = depth_results['robot_coordinate_results']
+                                                robot_z = robot_coords.get('Z', 2.0)  # Use Z from depth or default 2.0m
+                                            elif hasattr(camera_calibration, 'pixel_to_3d'):
+                                                try:
+                                                    # Fallback: sử dụng camera calibration để ước tính Z
+                                                    test_depth = 2.0  # Assumed depth
+                                                    X_3d, Y_3d, Z_3d = camera_calibration.pixel_to_3d(
+                                                        center_pixel[0], center_pixel[1], test_depth
+                                                    )
+                                                    robot_z = Z_3d
+                                                except Exception:
+                                                    robot_z = 2.0  # Final fallback
+                                            
+                                            # ⭐ SEND SINGLE REGION WITH X,Y,Z TO PLC ⭐
+                                            # Map region_id to DB26 offset index
+                                            offset_index = region_id - 1  # region_id 1,2,3 -> index 0,1,2
+                                            if 0 <= offset_index < len(db26_offsets_xyz):
+                                                offsets = db26_offsets_xyz[offset_index]
+                                                
+                                                # Write X, Y, Z coordinates
+                                                px_success = plc_comm.write_db26_real(offsets['px'], robot_x)
+                                                py_success = plc_comm.write_db26_real(offsets['py'], robot_y)
+                                                pz_success = plc_comm.write_db26_real(offsets['pz'], robot_z)
+                                                
+                                                if px_success and py_success and pz_success:
+                                                    # ⭐ NEW CONSOLE OUTPUT WITH Z (mỗi 10 frames để dễ thấy) ⭐
+                                                    if detection_counter.value % 10 == 0:
+                                                        print(f"[SEQUENCE][Frame {detection_counter.value}] P{target_pallet_id}R{region_id} → DB26.{offsets['px']}/{offsets['py']}/{offsets['pz']}: Px={robot_x:.2f}, Py={robot_y:.2f}, Pz={robot_z:.2f}")
+                                                        
+                                                        # ⭐ SHOW SEQUENCE STATUS ⭐
+                                                        status = region_sequencer.get_queue_status()
+                                                        print(f"[SEQUENCE][Frame {detection_counter.value}] Progress: {status['progress']}, Status: {status['status']}")
+                                                        
+                                                        # ⭐ SHOW DEPTH INFO ⭐
+                                                        # TODO: Integrate với depth process để có depth info thực tế
+                                                        print(f"[SEQUENCE][Frame {detection_counter.value}] Using fallback Z={robot_z:.2f}m (depth integration needed)")
+                                                    
+                                                    # ⭐ AUTO-COMPLETE FOR DEMO (can be manual in real implementation) ⭐
+                                                    # TODO: In real implementation, wait for robot completion signal
+                                                    # region_sequencer.mark_region_completed()
+                                                    
+                                                else:
+                                                    print(f"[SEQUENCE] ❌ Failed to send P{target_pallet_id}R{region_id}")
+                                            else:
+                                                print(f"[SEQUENCE] ❌ Invalid region_id {region_id} for offset mapping")
+                                        else:
+                                            print(f"[SEQUENCE] ⏳ No more regions in queue")
+                                    else:
+                                        print(f"[SEQUENCE] ❌ No regions found for target pallet {target_pallet_id}")
+                                else:
+                                    if not has_loads:
+                                        print(f"[SEQUENCE] No loads detected (classes {load_classes}), skipping PLC sending")
+                                    else:
+                                        print(f"[SEQUENCE] No pallet regions available")
+                                    
+                            except Exception as e:
+                                print(f"[SEQUENCE] Error in sequential sending: {e}")
+                                # Traceback đã được import ở đầu file
+                                traceback.print_exc()
                         
                         # 2. XỬ LÝ NON-PALLET (class khác): Không chia regions, chỉ lấy depth cho toàn bộ bbox
                         non_pallet_depth_regions = []
@@ -292,11 +497,11 @@ def _yolo_detection_worker(
                                         
                                         non_pallet_depth_regions.append(depth_region)
                         
-                        print(f"[PIPELINE DEBUG] Non-pallet regions: {len(non_pallet_depth_regions)}")
+                        # print(f"[PIPELINE DEBUG] Non-pallet regions: {len(non_pallet_depth_regions)}")
                         
                         # 3. MERGE CẢ 2 LOẠI REGIONS
                         depth_regions = pallet_depth_regions + non_pallet_depth_regions
-                        print(f"[PIPELINE DEBUG] Total depth regions: {len(depth_regions)}")
+                        # print(f"[PIPELINE DEBUG] Total depth regions: {len(depth_regions)}")
 
                         # ⭐ THÊM THETA4 CALCULATION TẠI ĐÂY ⭐
                         theta4_result = None
@@ -307,16 +512,17 @@ def _yolo_detection_worker(
                                 has_regions = len(pallet_depth_regions) > 0
                                 
                                 if has_loads and has_regions:
-                                    print(f"[PIPELINE DEBUG] Tính toán Theta4...")
+                                    # print(f"[PIPELINE DEBUG] Tính toán Theta4...")
                                     theta4_result = theta4_calculator.process_full_pipeline(detections, layer=1)
-                                    print(f"[PIPELINE DEBUG] Theta4 completed: {theta4_result['summary']['successful_theta4']} successful calculations")
+                                    # print(f"[PIPELINE DEBUG] Theta4 completed: {theta4_result['summary']['successful_theta4']} successful calculations")
                                 else:
-                                    print(f"[PIPELINE DEBUG] Bỏ qua Theta4: has_loads={has_loads}, has_regions={has_regions}")
+                                    # print(f"[PIPELINE DEBUG] Bỏ qua Theta4: has_loads={has_loads}, has_regions={has_regions}")
+                                    pass
                             except Exception as e:
-                                print(f"[YOLO Process] Warning: Theta4 calculation failed: {e}")
+                                # print(f"[YOLO Process] Warning: Theta4 calculation failed: {e}")
                                 theta4_result = None
 
-                        # ⭐ THÊM ROBOT COORDINATE TRANSFORMATION ⭐
+                        # ⭐ THÊM ROBOT COORDINATE TRANSFORMATION VỚI REGION OFFSET ⭐
                         robot_coordinates = []
                         if 'classes' in detections and detections['classes']:
                             classes = detections['classes']
@@ -336,8 +542,18 @@ def _yolo_detection_worker(
                                         center_y = (bbox[1] + bbox[3]) / 2
                                         confidence = scores[i] if i < len(scores) else 0.0
                                         
+                                        # ⭐ TÌM REGION CHO DETECTION ⭐
+                                        assigned_region = region_manager.get_region_for_detection((center_x, center_y), cls)
+                                        
                                         # Chuyển đổi từ camera pixel sang robot coordinates
                                         robot_x, robot_y = robot_transformer.camera_to_robot(center_x, center_y)
+                                        
+                                        # ⭐ ÁP DỤNG OFFSET THEO REGION ⭐
+                                        robot_coords_raw = {'x': robot_x, 'y': robot_y}
+                                        if assigned_region:
+                                            robot_coords_final = region_manager.apply_region_offset(robot_coords_raw, assigned_region)
+                                        else:
+                                            robot_coords_final = robot_coords_raw
                                         
                                         # Tính thêm tọa độ 3D camera để so sánh (sử dụng camera calibration)
                                         camera_3d = None
@@ -352,7 +568,8 @@ def _yolo_detection_worker(
                                                 'Z': round(Z_3d, 3)
                                             }
                                         except Exception as e:
-                                            print(f"[YOLO Process] Camera 3D calculation failed: {e}")
+                                            # print(f"[YOLO Process] Camera 3D calculation failed: {e}")
+                                            pass
                                         
                                         coord_info = {
                                             'class': class_names[cls],
@@ -363,28 +580,69 @@ def _yolo_detection_worker(
                                                 'y': int(center_y)
                                             },
                                             'robot_coordinates': {
+                                                'x': round(robot_coords_final['x'], 2),
+                                                'y': round(robot_coords_final['y'], 2)
+                                            },
+                                            'robot_coordinates_raw': {
                                                 'x': round(robot_x, 2),
                                                 'y': round(robot_y, 2)
                                             },
+                                            'assigned_region': assigned_region,  # ⭐ THÊM THÔNG TIN REGION ⭐
                                             'camera_3d': camera_3d,  # Thêm để so sánh
                                             'bbox': [int(x) for x in bbox]
                                         }
                                         
                                         robot_coordinates.append(coord_info)
                                         
-                                        # In ra console
-                                        print(f"[ROBOT COORDS] {class_names[cls]}: Pixel({int(center_x)},{int(center_y)}) → Robot(X={robot_x:.2f}, Y={robot_y:.2f})")
-                                        if camera_3d:
-                                            print(f"                Camera3D: X={camera_3d['X']:.3f}, Y={camera_3d['Y']:.3f}, Z={camera_3d['Z']:.3f}")
+                                        # In ra console - LOG ROBOT COORDINATES VỚI REGION INFO (mỗi 50 frames)
+                                        if detection_counter.value % 50 == 0:
+                                            region_str = f"[{assigned_region}]" if assigned_region else "[UNASSIGNED]"
+                                            print(f"[ROBOT COORDS][Frame {detection_counter.value}] {region_str} {class_names[cls]}: Pixel({int(center_x)},{int(center_y)}) → Robot(X={robot_coords_final['x']:.2f}, Y={robot_coords_final['y']:.2f})")
+                                            if assigned_region and robot_coords_raw != robot_coords_final:
+                                                print(f"                Raw Robot(X={robot_x:.2f}, Y={robot_y:.2f}) + Offset → Final(X={robot_coords_final['x']:.2f}, Y={robot_coords_final['y']:.2f})")
+                                            if camera_3d:
+                                                print(f"                Camera3D: X={camera_3d['X']:.3f}, Y={camera_3d['Y']:.3f}, Z={camera_3d['Z']:.3f}")
                                         
                                 except Exception as e:
-                                    print(f"[YOLO Process] Error processing robot coordinate for class {cls}: {e}")
+                                    # print(f"[YOLO Process] Error processing robot coordinate for class {cls}: {e}")
+                                    pass
 
-                        # Thêm theta4 info và robot coordinates vào detections để truyền ra ngoài
+                        # Thêm theta4 info, robot coordinates và region info vào detections để truyền ra ngoài
                         detections_with_theta4 = detections.copy()
                         detections_with_theta4['theta4_result'] = theta4_result
                         detections_with_theta4['divided_result'] = divided_result  # Cũng truyền module division result
                         detections_with_theta4['robot_coordinates'] = robot_coordinates  # ⭐ THÊM ROBOT COORDINATES
+                        detections_with_theta4['region_filtered'] = region_filtered  # ⭐ THÊM REGION INFORMATION
+                        detections_with_theta4['pallet_regions'] = pallet_depth_regions  # ⭐ THÊM PALLET REGIONS INFORMATION
+                        
+                        # ⭐ DEBUG: Confirm pallet_regions được gửi ra ngoài (mỗi 10 frames để dễ thấy) ⭐
+                        if detection_counter.value % 10 == 0:
+                            print(f"[SEQUENCE DEBUG] Sending to main process:")
+                            print(f"  pallet_regions in output: {len(pallet_depth_regions)} regions")
+                            print(f"  detections_with_theta4 keys: {list(detections_with_theta4.keys())}")
+                        
+                        # ⭐ THÊM SEQUENCER STATUS CHO KEYBOARD CONTROLS ⭐
+                        if '_region_sequencer' in globals():
+                            region_sequencer = globals()['_region_sequencer']
+                            sequencer_status = region_sequencer.get_queue_status()
+                            detections_with_theta4['sequencer_status'] = sequencer_status
+                            detections_with_theta4['sequencer_available'] = True
+                            
+                            # ⭐ DEBUG: Confirm sequencer status được thêm (mỗi 10 frames) ⭐
+                            if detection_counter.value % 10 == 0:
+                                print(f"[SEQUENCE DEBUG] Adding sequencer status:")
+                                print(f"  sequencer_available: True")
+                                print(f"  sequencer_status: {sequencer_status['status']}")
+                                print(f"  current_pallet: {sequencer_status.get('current_pallet')}")
+                                print(f"  progress: {sequencer_status['progress']}")
+                        else:
+                            detections_with_theta4['sequencer_status'] = None
+                            detections_with_theta4['sequencer_available'] = False
+                            
+                            # ⭐ DEBUG: No sequencer found ⭐
+                            if detection_counter.value % 10 == 0:
+                                print(f"[SEQUENCE DEBUG] No sequencer found in globals()")
+                                print(f"  sequencer_available: False")
 
                         # Gửi kết quả detection (bao gồm theta4) ra ngoài
                         detection_queue.put((frame, detections_with_theta4))
@@ -402,20 +660,22 @@ def _yolo_detection_worker(
                             if depth_info_queue.full():
                                 # Nếu đầy, bỏ qua việc đưa vào depth queue
                                 # Điều này cho phép YOLO tiếp tục hoạt động
-                                print(f"[YOLO Process] Depth queue đầy, bỏ qua xử lý depth cho frame này")
+                                # print(f"[YOLO Process] Depth queue đầy, bỏ qua xử lý depth cho frame này")
+                                pass
                             else:
                                 # Sử dụng put_nowait thay vì put để tránh chặn
                                 depth_info_queue.put_nowait(depth_info)
                         except Exception as e:
                             # Bỏ qua lỗi khi queue đầy
-                            print(f"[YOLO Process] Không thể đưa vào depth queue: {str(e)}")
+                            # print(f"[YOLO Process] Không thể đưa vào depth queue: {str(e)}")
+                            pass
                         
                         with detection_counter.get_lock():
                             detection_counter.value += 1
                         detection_count += 1
                         
-                        if detection_count % 10 == 0:
-                            print(f"[YOLO Process {mp.current_process().pid}] Đã xử lý {detection_count} detections")
+                        # if detection_count % 10 == 0:
+                        #     print(f"[YOLO Process {mp.current_process().pid}] Đã xử lý {detection_count} detections")
                     else:
                         time.sleep(sleep)
                 except Exception as e:
@@ -429,6 +689,14 @@ def _yolo_detection_worker(
             print(error_msg)
             error_queue.put(error_msg)
             traceback.print_exc()
+        finally:
+            # ⭐ CLEANUP PLC CONNECTION ⭐
+            if 'plc_comm' in locals() and plc_comm:
+                try:
+                    plc_comm.disconnect()
+                    print(f"[YOLO Process] PLC disconnected")
+                except:
+                    pass
     except Exception as e:
         error_msg = f"[YOLO Process {mp.current_process().pid}] Lỗi khởi tạo process: {e}"
         print(error_msg)
@@ -465,7 +733,7 @@ def _depth_estimation_worker(
         sleep: Thời gian sleep nếu không có dữ liệu mới
     """
     try:
-        print(f"[Depth Process {mp.current_process().pid}] Đã khởi động")
+        # print(f"[Depth Process {mp.current_process().pid}] Đã khởi động")
         import threading
         import queue
         
@@ -479,7 +747,7 @@ def _depth_estimation_worker(
         # Thread riêng để xử lý depth (tác vụ nặng)
         def depth_processing_thread():
             nonlocal depth_counter, depth_count
-            print(f"[Depth Thread] Đã khởi động thread xử lý độ sâu")
+            # print(f"[Depth Thread] Đã khởi động thread xử lý độ sâu")
             
             while thread_running.is_set():
                 try:
@@ -503,19 +771,19 @@ def _depth_estimation_worker(
                                 region_depth = depth_model.estimate_depth(frame, [bbox])
                             
                             # DEBUG: In thông tin chi tiết về depth
-                            if region_depth and len(region_depth) > 0:
-                                depth_info = region_depth[0]
-                                print(f"[DEPTH DEBUG] Region {region_info.get('region_id', '?')} (Pallet {region_info.get('pallet_id', '?')}):")
-                                if isinstance(depth_info, dict):
-                                    print(f"  - Mean depth: {depth_info.get('mean_depth', 0.0):.3f}m")
-                                    print(f"  - Min depth: {depth_info.get('min_depth', 0.0):.3f}m") 
-                                    print(f"  - Max depth: {depth_info.get('max_depth', 0.0):.3f}m")
-                                    print(f"  - Std depth: {depth_info.get('std_depth', 0.0):.3f}m")
-                                    if 'center_3d' in depth_info:
-                                        pos_3d = depth_info['center_3d']
-                                        print(f"  - 3D position: X={pos_3d.get('X', 0):.3f}m, Y={pos_3d.get('Y', 0):.3f}m, Z={pos_3d.get('Z', 0):.3f}m")
-                                else:
-                                    print(f"  - Depth value: {depth_info}")
+                            # if region_depth and len(region_depth) > 0:
+                            #     depth_info = region_depth[0]
+                            #     print(f"[DEPTH DEBUG] Region {region_info.get('region_id', '?')} (Pallet {region_info.get('pallet_id', '?')}):")
+                            #     if isinstance(depth_info, dict):
+                            #         print(f"  - Mean depth: {depth_info.get('mean_depth', 0.0):.3f}m")
+                            #         print(f"  - Min depth: {depth_info.get('min_depth', 0.0):.3f}m") 
+                            #         print(f"  - Max depth: {depth_info.get('max_depth', 0.0):.3f}m")
+                            #         print(f"  - Std depth: {depth_info.get('std_depth', 0.0):.3f}m")
+                            #         if 'center_3d' in depth_info:
+                            #             pos_3d = depth_info['center_3d']
+                            #             print(f"  - 3D position: X={pos_3d.get('X', 0):.3f}m, Y={pos_3d.get('Y', 0):.3f}m, Z={pos_3d.get('Z', 0):.3f}m")
+                            #     else:
+                            #         print(f"  - Depth value: {depth_info}")
                             
                             # Tạo kết quả chi tiết cho region
                             if region_depth and len(region_depth) > 0:
@@ -556,8 +824,8 @@ def _depth_estimation_worker(
                             depth_counter.value += 1
                         depth_count += 1
                         
-                        if depth_count % 10 == 0:
-                            print(f"[Depth Thread] Đã xử lý {depth_count} depth estimates cho {len(depth_results)} regions")
+                        # if depth_count % 10 == 0:
+                        #     print(f"[Depth Thread] Đã xử lý {depth_count} depth estimates cho {len(depth_results)} regions")
                     except queue.Empty:
                         time.sleep(0.01)
                         continue
@@ -575,7 +843,7 @@ def _depth_estimation_worker(
         try:
             # Khởi tạo model
             depth_model = depth_factory()
-            print(f"[Depth Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(depth_model).__name__}")
+            # print(f"[Depth Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(depth_model).__name__}")
             
             # Báo hiệu đã sẵn sàng
             ready_event.set()
@@ -648,7 +916,9 @@ class ProcessingPipeline:
         camera_factory: Callable[[], Any],
         yolo_factory: Callable[[], Any],
         depth_factory: Callable[[], Any],
-        max_queue_size: int =  3
+        max_queue_size: int =  3,
+        enable_plc: bool = True,
+        plc_ip: str = "192.168.0.1"
     ):
         """
         Khởi tạo pipeline xử lý đa luồng.
@@ -700,6 +970,31 @@ class ProcessingPipeline:
         # Các QueueManager cho việc lấy kết quả
         self.detection_manager = QueueManager(maxsize=max_queue_size)
         self.depth_manager = QueueManager(maxsize=max_queue_size)
+        
+        # ⭐ PLC INTEGRATION ⭐
+        self.enable_plc = enable_plc
+        self.plc_ip = plc_ip
+        self.plc_integration = None
+        
+        if self.enable_plc and REGION_PLC_AVAILABLE:
+            try:
+                print(f"[Pipeline] 🔧 Initializing PLC Integration (IP: {plc_ip})...")
+                self.plc_integration = RegionDivisionPLCIntegration(
+                    plc_ip=plc_ip, 
+                    debug=True
+                )
+                print(f"[Pipeline] ✅ PLC Integration initialized successfully!")
+                print(f"[Pipeline] 📋 PLC DB26 Layout: loads=0/4, pallets1=12/16, pallets2=24/28")
+            except Exception as e:
+                print(f"[Pipeline] ❌ Failed to initialize PLC Integration: {e}")
+                import traceback
+                traceback.print_exc()
+                self.plc_integration = None
+        elif self.enable_plc:
+            print(f"[Pipeline] ❌ PLC Integration requested but RegionDivisionPLCIntegration not available")
+            print(f"[Pipeline] 💡 Check if region_division_plc_integration.py exists and imports correctly")
+        else:
+            print(f"[Pipeline] ℹ️ PLC Integration disabled")
     
     def start(self, timeout: float = 30.0) -> bool:
         """
@@ -733,7 +1028,7 @@ class ProcessingPipeline:
             daemon=True,
         )
         self._camera_process.start()
-        print(f"Camera Process đã khởi động với PID: {self._camera_process.pid}")
+        # print(f"Camera Process đã khởi động với PID: {self._camera_process.pid}")
         
         # Khởi động YOLO Process
         self._yolo_process = mp.Process(
@@ -751,7 +1046,7 @@ class ProcessingPipeline:
             daemon=True,
         )
         self._yolo_process.start()
-        print(f"YOLO Process đã khởi động với PID: {self._yolo_process.pid}")
+        # print(f"YOLO Process đã khởi động với PID: {self._yolo_process.pid}")
         
         # Khởi động Depth Process
         self._depth_process = mp.Process(
@@ -768,10 +1063,10 @@ class ProcessingPipeline:
             daemon=True,
         )
         self._depth_process.start()
-        print(f"Depth Process đã khởi động với PID: {self._depth_process.pid}")
+        # print(f"Depth Process đã khởi động với PID: {self._depth_process.pid}")
         
         # Đợi camera process sẵn sàng với timeout dài hơn vì thường khởi tạo camera mất nhiều thời gian
-        print(f"Đang đợi Camera Process (tối đa {timeout}s)...")
+        # print(f"Đang đợi Camera Process (tối đa {timeout}s)...")
         camera_ready = self._camera_ready_event.wait(timeout)
         
         # Đợi các process khác
@@ -782,17 +1077,17 @@ class ProcessingPipeline:
         self._check_errors()
         
         # In thông tin trạng thái
-        print(f"Camera Process ready: {camera_ready}")
-        print(f"YOLO Process ready: {yolo_ready}")
-        print(f"Depth Process ready: {depth_ready}")
+        # print(f"Camera Process ready: {camera_ready}")
+        # print(f"YOLO Process ready: {yolo_ready}")
+        # print(f"Depth Process ready: {depth_ready}")
         
         # Nếu phát hiện camera process còn sống nhưng không sẵn sàng, thử kiểm tra lại một lần nữa
         if not camera_ready and self._camera_process.is_alive():
-            print("Camera process còn sống nhưng chưa sẵn sàng, kiểm tra lại...")
+            # print("Camera process còn sống nhưng chưa sẵn sàng, kiểm tra lại...")
             # Thử kiểm tra lại nếu Process còn sống
             time.sleep(1.0)  # Đợi thêm chút nữa
             camera_ready = self._camera_ready_event.is_set()
-            print(f"Kiểm tra lại Camera Process ready: {camera_ready}")
+            # print(f"Kiểm tra lại Camera Process ready: {camera_ready}")
         
         # Khởi động background thread để chuyển kết quả từ Queue vào QueueManager
         if camera_ready and yolo_ready and depth_ready:
@@ -800,9 +1095,9 @@ class ProcessingPipeline:
             return True
         else:
             # In thông tin debug về các process đang chạy
-            print(f"Camera Process is alive: {self._camera_process.is_alive()}")
-            print(f"YOLO Process is alive: {self._yolo_process.is_alive()}")
-            print(f"Depth Process is alive: {self._depth_process.is_alive()}")
+            # print(f"Camera Process is alive: {self._camera_process.is_alive()}")
+            # print(f"YOLO Process is alive: {self._yolo_process.is_alive()}")
+            # print(f"Depth Process is alive: {self._depth_process.is_alive()}")
             return False
     
     def _start_queue_workers(self):
@@ -836,6 +1131,9 @@ class ProcessingPipeline:
         """Dừng tất cả các process."""
         print("Đang dừng tất cả các process...")
         self._run_event.clear()
+        
+        # ⭐ DISCONNECT PLC FIRST ⭐
+        self.disconnect_plc()
         
         # Dừng và join từng process
         if self._camera_process:
@@ -911,7 +1209,7 @@ class ProcessingPipeline:
             try:
                 error = self._error_queue.get_nowait()
                 self._errors.append(error)
-                print(f"Lỗi từ process con: {error}")
+                # print(f"Lỗi từ process con: {error}")
             except:
                 break
     
@@ -944,6 +1242,247 @@ class ProcessingPipeline:
             'detections': self.detection_counter.value,
             'depths': self.depth_counter.value
         }
+    
+    def get_region_sequencer(self):
+        """
+        Lấy region sequencer proxy để sử dụng keyboard controls.
+        
+        Returns:
+            SequencerProxy object để interact với RegionSequencer trong worker process
+        """
+        if not hasattr(self, '_sequencer_proxy'):
+            self._sequencer_proxy = SequencerProxy(self)
+        
+        return self._sequencer_proxy
+    
+    # ⭐ PLC INTEGRATION METHODS ⭐
+    def connect_plc(self) -> bool:
+        """
+        Kết nối PLC nếu PLC integration được bật.
+        
+        Returns:
+            bool: True nếu kết nối thành công hoặc PLC không được bật
+        """
+        if not self.enable_plc:
+            print(f"[Pipeline] ℹ️ PLC not enabled, skipping connection")
+            return True  # Thành công mặc định nếu không sử dụng PLC
+        
+        if not self.plc_integration:
+            print(f"[Pipeline] ❌ PLC integration not initialized!")
+            return False
+        
+        print(f"[Pipeline] 🔌 Attempting to connect to PLC at {self.plc_ip}...")
+        try:
+            connected = self.plc_integration.connect_plc()
+            if connected:
+                print(f"[Pipeline] ✅ PLC connection successful!")
+            else:
+                print(f"[Pipeline] ❌ PLC connection failed!")
+            return connected
+        except Exception as e:
+            print(f"[Pipeline] ❌ PLC connection error: {e}")
+            return False
+    
+    def disconnect_plc(self):
+        """Ngắt kết nối PLC."""
+        if self.plc_integration:
+            self.plc_integration.disconnect_plc()
+    
+    def get_plc_integration(self):
+        """
+        Lấy PLC integration object.
+        
+        Returns:
+            RegionDivisionPLCIntegration hoặc None
+        """
+        return self.plc_integration
+    
+    def send_region_to_plc(self, detections: dict) -> bool:
+        """
+        Gửi regions từ detections vào PLC.
+        
+        Args:
+            detections: Detection results từ pipeline
+            
+        Returns:
+            bool: True nếu gửi thành công
+        """
+        if not self.plc_integration:
+            print(f"[Pipeline] PLC integration not available")
+            return False
+        
+        # Sử dụng existing method từ RegionDivisionPLCIntegration
+        regions_data, send_success = self.plc_integration.process_detection_and_send_to_plc(
+            detections, layer=1
+        )
+        
+        return send_success
+
+
+class SequencerProxy:
+    """
+    Proxy class để interact với RegionSequencer trong worker process từ main process.
+    """
+    
+    def __init__(self, pipeline):
+        self.pipeline = pipeline
+        self._last_status = None
+    
+    def _get_current_status(self):
+        """Lấy status hiện tại từ detection results."""
+        try:
+            # ⭐ TỐI ƯU TIMEOUT ⭐ - Thử nhiều lần với timeout ngắn
+            for attempt in range(3):  # 3 attempts
+                detection_result = self.pipeline.get_latest_detection(timeout=0.3)
+                if detection_result:
+                    frame, detections = detection_result
+                    
+                    # ⭐ DEBUG: Log để trace data reception ⭐
+                    sequencer_available = detections.get('sequencer_available', False)
+                    has_status = 'sequencer_status' in detections
+                    status = detections.get('sequencer_status')
+                    
+                    print(f"[SequencerProxy DEBUG] _get_current_status (attempt {attempt+1}):")
+                    print(f"  sequencer_available: {sequencer_available}")
+                    print(f"  has_status: {has_status}")
+                    print(f"  status: {status is not None}")
+                    
+                    if sequencer_available and status:
+                        self._last_status = status
+                        print(f"  ✅ Status updated: {status['status']}")
+                        return self._last_status
+                    else:
+                        print(f"  ❌ No valid status received")
+                        if attempt < 2:  # Không log ở attempt cuối
+                            print(f"  🔄 Retrying...")
+                else:
+                    print(f"[SequencerProxy DEBUG] Attempt {attempt+1}: No detection result")
+        except Exception as e:
+            print(f"[SequencerProxy DEBUG] Error: {e}")
+        return self._last_status
+    
+    def get_queue_status(self):
+        """Lấy queue status từ worker process."""
+        status = self._get_current_status()
+        if status:
+            return status
+        
+        # Fallback status nếu không có thông tin
+        return {
+            'status': 'UNKNOWN',
+            'current_pallet': None,
+            'current_index': 0,
+            'total_regions': 0,
+            'completed_count': 0,
+            'remaining_count': 0,
+            'progress': '0/0',
+            'completed_regions': [],
+            'remaining_regions': [],
+            'sequence': [1, 3, 2]
+        }
+    
+    def get_next_region(self):
+        """
+        Trigger next region - TỰ ĐỘNG GỬI VÀO PLC với FALLBACK SENDING.
+        """
+        print("   🚀 Manual trigger: Get next region...")
+        
+        # ⭐ STEP 1: CHECK SEQUENCER STATUS ⭐
+        current_status = self._get_current_status()
+        if current_status:
+            print(f"   📊 Current sequencer status: {current_status['status']}")
+            print(f"   📊 Progress: {current_status['progress']}")
+        else:
+            print(f"   ⚠️ Sequencer status not available, using fallback sending...")
+        
+        # ⭐ STEP 2: DIRECT PLC SENDING (ALWAYS WORKS) ⭐
+        try:
+            # Lấy latest detection để gửi vào PLC
+            detection_result = self.pipeline.get_latest_detection(timeout=1.0)
+            if detection_result:
+                frame, detections = detection_result
+                
+                # ⭐ CHECK PLC INTEGRATION AVAILABILITY ⭐
+                plc_integration = self.pipeline.get_plc_integration()
+                if not plc_integration:
+                    print("   ❌ PLC integration not available!")
+                    return None
+                
+                if not plc_integration.plc_connected:
+                    print("   🔌 PLC not connected, attempting to connect...")
+                    connected = plc_integration.connect_plc()
+                    if not connected:
+                        print("   ❌ Failed to connect to PLC!")
+                        return None
+                    else:
+                        print("   ✅ PLC connected successfully!")
+                
+                # ⭐ SEND TO PLC USING DIRECT METHOD ⭐
+                print("   📤 Sending regions to PLC...")
+                regions_data, send_success = plc_integration.process_detection_and_send_to_plc(detections, layer=1)
+                
+                if send_success:
+                    print("   ✅ Successfully sent regions to PLC!")
+                    print(f"   📋 Processed {len(regions_data)} regions")
+                    
+                    # ⭐ HIỂN THỊ BAG PALLET TRACKING STATUS ⭐
+                    bag_status = plc_integration.get_bag_pallet_status()
+                    print(f"   📦 BAG PALLET TRACKING:")
+                    print(f"      bag_pallet_1 = {bag_status['bag_pallet_1']}")
+                    print(f"      bag_pallet_2 = {bag_status['bag_pallet_2']}")
+                    print(f"      Active regions: {bag_status['active_regions_count']}")
+                    
+                    # ⭐ SHOW DETAILED REGION DATA ⭐
+                    for region_name, region_data in bag_status['current_regions'].items():
+                        if region_data:
+                            pallet_id = region_data['pallet_id']
+                            region_id = region_data['region_id']
+                            robot_coords = region_data['robot_coords']
+                            print(f"      {region_name}: P{pallet_id}R{region_id} → Px={robot_coords['px']:.2f}, Py={robot_coords['py']:.2f}")
+                    
+                    # ⭐ READ BACK FROM PLC TO VERIFY ⭐
+                    print("   🔍 Reading back from PLC to verify...")
+                    plc_data = plc_integration.read_regions_from_plc()
+                    if plc_data:
+                        print("   📊 PLC Memory Content:")
+                        for region_name, data in plc_data.items():
+                            print(f"      {region_name}: Px={data['px']:.2f} (DB26.{data['px_offset']}), Py={data['py']:.2f} (DB26.{data['py_offset']})")
+                else:
+                    print("   ❌ Failed to send regions to PLC")
+                    if regions_data:
+                        print(f"   📋 Regions were processed ({len(regions_data)}) but PLC sending failed")
+            else:
+                print("   ⚠️ No detection data available")
+                
+        except Exception as e:
+            print(f"   ❌ Error in PLC sending process: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return None
+    
+    def mark_region_completed(self):
+        """
+        Mark region completed (chỉ để tương thích với keyboard controls).
+        Thực tế cần implement command communication với worker process.
+        """
+        print("   ℹ️ Manual completion chưa được implement")
+        print("   🔄 Sequential logic hiện đang auto-complete trong demo mode")
+        return False
+    
+    def reset_sequence(self):
+        """
+        Reset sequence (chỉ để tương thích với keyboard controls).
+        Thực tế cần implement command communication với worker process.
+        """
+        print("   ℹ️ Manual reset chưa được implement")
+        print("   🔄 Restart chương trình để reset sequence")
+        return False
+    
+    def is_available(self):
+        """Kiểm tra xem sequencer có available không."""
+        status = self._get_current_status()
+        return status is not None
 
 
 # Ví dụ sử dụng

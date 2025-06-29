@@ -181,6 +181,153 @@ class Theta4WithModuleDivision:
             'layer': layer
         }
     
+    # ⭐ SEQUENTIAL PLACEMENT METHODS - ADDED FOR PLAN IMPLEMENTATION ⭐
+    
+    def get_target_region_for_load(self, pipeline_result: Dict, load_class_id: float) -> Optional[Dict]:
+        """
+        Lấy target region cho load dựa trên class_id.
+        
+        Args:
+            pipeline_result: Kết quả từ process_full_pipeline
+            load_class_id: Class ID của load (0.0 cho load, 1.0 cho load2)
+            
+        Returns:
+            Dict: Target region hoặc None
+        """
+        if self.debug:
+            print(f"\n=== GET TARGET REGION FOR LOAD {load_class_id} ===")
+        
+        # Logic mapping: Load class 0.0 (load) → Pallets1 (P1), Load class 1.0 (load2) → Pallets2 (P2)
+        target_pallet_id = 1 if load_class_id == 0.0 else 2
+        
+        # Lấy regions data từ pipeline result
+        regions_data = pipeline_result.get('regions_data', [])
+        
+        # Sử dụng ModuleDivision để lấy next available region theo sequence [1, 3, 2]
+        target_region = self.module_divider.get_next_available_region(
+            regions_data, target_pallet_id, sequence=[1, 3, 2]
+        )
+        
+        if self.debug:
+            if target_region:
+                region_info = target_region.get('region_info', {})
+                print(f"Load class {load_class_id} → Pallet {target_pallet_id}, Region {region_info.get('region_id')}")
+            else:
+                print(f"Không tìm thấy target region cho load class {load_class_id}")
+        
+        return target_region
+    
+    def process_load_placement_sequence(self, detections: Dict, layer: int = 1) -> Dict:
+        """
+        Xử lý placement theo sequence cho loads.
+        
+        Args:
+            detections: Kết quả detection từ YOLO
+            layer: Layer để chia (default: 1)
+            
+        Returns:
+            Dict: Kết quả placement với sequence info
+        """
+        if self.debug:
+            print(f"\n=== PROCESS LOAD PLACEMENT SEQUENCE ===")
+        
+        # Phân tích objects
+        pallet_objects, load_objects = self.analyze_object_dimensions_and_orientation(detections)
+        
+        # Chia pallets thành regions
+        division_result = self.divide_pallets_into_regions(detections, layer)
+        
+        # Xử lý từng load
+        placement_mappings = []
+        for load_obj in load_objects:
+            load_class_id = load_obj['class_id']
+            
+            # Lấy target region cho load này
+            target_region = self.get_target_region_for_load(division_result, load_class_id)
+            
+            if target_region:
+                placement_mapping = {
+                    'load_object': load_obj,
+                    'target_region': target_region,
+                    'placement_sequence': [1, 3, 2],
+                    'status': 'pending'
+                }
+                placement_mappings.append(placement_mapping)
+        
+        result = {
+            'pallet_objects': pallet_objects,
+            'load_objects': load_objects,
+            'division_result': division_result,
+            'placement_mappings': placement_mappings,
+            'sequence': [1, 3, 2],
+            'total_placements': len(placement_mappings)
+        }
+        
+        if self.debug:
+            print(f"Tổng {len(placement_mappings)} placement mappings")
+        
+        return result
+    
+    def get_placement_sequence_for_pallet(self, pipeline_result: Dict, pallet_id: int) -> List[Dict]:
+        """
+        Lấy danh sách regions theo sequence [1, 3, 2] cho pallet cụ thể.
+        
+        Args:
+            pipeline_result: Kết quả từ process_full_pipeline hoặc process_load_placement_sequence
+            pallet_id: ID của pallet
+            
+        Returns:
+            List[Dict]: Danh sách regions theo sequence
+        """
+        if self.debug:
+            print(f"\n=== GET PLACEMENT SEQUENCE FOR PALLET {pallet_id} ===")
+        
+        # Lấy regions data
+        if 'division_result' in pipeline_result:
+            regions_data = pipeline_result['division_result'].get('regions_data', [])
+        else:
+            regions_data = pipeline_result.get('regions_data', [])
+        
+        # Sử dụng ModuleDivision để lấy sequence
+        ordered_regions = self.module_divider.get_regions_by_sequence(
+            regions_data, pallet_id, sequence=[1, 3, 2]
+        )
+        
+        if self.debug:
+            print(f"Pallet {pallet_id} sequence: {len(ordered_regions)} regions")
+            for i, region in enumerate(ordered_regions):
+                region_info = region.get('region_info', {})
+                print(f"  Sequence {i+1}: Region {region_info.get('region_id')}")
+        
+        return ordered_regions
+    
+    def get_all_pallets_placement_sequence(self, pipeline_result: Dict) -> Dict[int, List[Dict]]:
+        """
+        Lấy placement sequence cho tất cả pallets.
+        
+        Args:
+            pipeline_result: Kết quả từ process_full_pipeline hoặc process_load_placement_sequence
+            
+        Returns:
+            Dict[pallet_id, List[regions]]: Mapping pallet_id -> ordered regions
+        """
+        if self.debug:
+            print(f"\n=== GET ALL PALLETS PLACEMENT SEQUENCE ===")
+        
+        # Lấy regions data
+        if 'division_result' in pipeline_result:
+            regions_data = pipeline_result['division_result'].get('regions_data', [])
+        else:
+            regions_data = pipeline_result.get('regions_data', [])
+        
+        # Sử dụng ModuleDivision để lấy all pallets sequence
+        all_sequences = self.module_divider.get_all_pallets_sequence(regions_data, sequence=[1, 3, 2])
+        
+        if self.debug:
+            print(f"Found sequences for {len(all_sequences)} pallets")
+        
+        return all_sequences
+    
     def map_loads_to_regions(self, load_objects: List[Dict], regions_data: List[Dict]) -> List[Dict]:
         """
         Mapping loads với regions dựa trên proximity và availability.

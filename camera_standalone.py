@@ -699,7 +699,6 @@ def demo_camera():
         print("   'l': 🔇 Smart logging toggle (main + libraries)") 
         print("   'n': 🚀 Clean PLC send (auto-disable debug spam)")
         print("   'w': 🔄 Toggle load class trigger  |  'e': 📊 Show trigger status")
-        print("   ⭐ SAVED POSITIONS: 'm': Save current  |  '4': Send P1R1  |  '5': Send P1R3  |  '6': Send P1R2")
         print()
         
         try:
@@ -774,15 +773,6 @@ def demo_camera():
                     coords_text = f"Robot Coords: {len(robot_coords)}"
                     cv2.putText(display_frame, coords_text, (10, 150), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                    
-                    # ⭐ UPDATE DETECTION CONTEXT FOR SAVED POSITIONS ⭐
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                plc_integration.update_detection_context(detections)
-                        except Exception as e:
-                            pass  # Silent fail để không spam console
                 
                 # ⭐ ENHANCED: SEQUENCER PROGRESS INDICATOR (GIAIPHAP34) ⭐
                 sequencer_status = detections.get('sequencer_status')
@@ -974,13 +964,6 @@ def demo_camera():
                     print("'o': 🔒 Lock current orientation (save to file)")
                     print("'u': 🔓 Unlock orientation (back to auto-detection)")
                     print("'i': 📊 Show orientation lock info & status")
-                    print()
-                    print("=== SAVED POSITIONS CONTROLS ===")
-                    print("'m': 💾 Save current positions (confirm drop points)")
-                    print("'4': 📤 Send P1R1 position to PLC")
-                    print("'5': 📤 Send P1R3 position to PLC")
-                    print("'6': 📤 Send P1R2 position to PLC")
-                    print("'v': 📊 Show saved positions status")
                     print()
                     print("=== PLC INTEGRATION ===")
                     print(f"PLC Status: {'🟢 ENABLED' if enable_plc else '🔴 DISABLED'}")
@@ -1304,124 +1287,6 @@ def demo_camera():
                             print("   ⚠️ No pipeline data available")
                     except Exception as e:
                         print(f"   ❌ Error: {e}")
-                
-                # ⭐ SAVED POSITIONS CONTROLS ⭐
-                elif key == ord('m'):
-                    # Save current positions
-                    print("\n💾 [SAVED POSITIONS] Saving current detected positions...")
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                # ⭐ GET LATEST DETECTION DATA ⭐
-                                detection_result = pipeline.get_latest_detection(timeout=0.1)
-                                detection_data = None
-                                
-                                if detection_result:
-                                    frame, detections = detection_result
-                                    detection_data = detections
-                                    print(f"   📋 Found detection data with {len(detections.get('robot_coordinates', []))} robot coordinates")
-                                else:
-                                    print("   ⚠️ No current detection data available")
-                                
-                                # Save positions with detection data
-                                success = plc_integration.save_current_positions(detection_data)
-                                if success:
-                                    print("   ✅ Positions saved successfully!")
-                                    # Show saved positions status
-                                    status = plc_integration.get_saved_positions_status()
-                                    print(f"   📊 Total saved: {status['total_saved']}/6 positions")
-                                else:
-                                    print("   ❌ Failed to save positions")
-                            else:
-                                print("   ❌ PLC integration not available")
-                        except Exception as e:
-                            print(f"   ❌ Error saving positions: {e}")
-                    else:
-                        print("   ⚠️ PLC disabled, saved positions not available")
-                
-                elif key == ord('4'):
-                    # Send P1R1 position to PLC
-                    print("\n📤 [SAVED POSITIONS] Sending P1R1 position to PLC...")
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                success = plc_integration.send_saved_position_to_plc('P1R1')
-                                if success:
-                                    print("   ✅ P1R1 position sent successfully!")
-                                else:
-                                    print("   ❌ Failed to send P1R1 position")
-                            else:
-                                print("   ❌ PLC integration not available")
-                        except Exception as e:
-                            print(f"   ❌ Error sending P1R1: {e}")
-                    else:
-                        print("   ⚠️ PLC disabled, cannot send saved positions")
-                
-                elif key == ord('5'):
-                    # Send P1R3 position to PLC
-                    print("\n📤 [SAVED POSITIONS] Sending P1R3 position to PLC...")
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                success = plc_integration.send_saved_position_to_plc('P1R3')
-                                if success:
-                                    print("   ✅ P1R3 position sent successfully!")
-                                else:
-                                    print("   ❌ Failed to send P1R3 position")
-                            else:
-                                print("   ❌ PLC integration not available")
-                        except Exception as e:
-                            print(f"   ❌ Error sending P1R3: {e}")
-                    else:
-                        print("   ⚠️ PLC disabled, cannot send saved positions")
-                
-                elif key == ord('6'):
-                    # Send P1R2 position to PLC
-                    print("\n📤 [SAVED POSITIONS] Sending P1R2 position to PLC...")
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                success = plc_integration.send_saved_position_to_plc('P1R2')
-                                if success:
-                                    print("   ✅ P1R2 position sent successfully!")
-                                else:
-                                    print("   ❌ Failed to send P1R2 position")
-                            else:
-                                print("   ❌ PLC integration not available")
-                        except Exception as e:
-                            print(f"   ❌ Error sending P1R2: {e}")
-                    else:
-                        print("   ⚠️ PLC disabled, cannot send saved positions")
-                
-                elif key == ord('v'):
-                    # Show saved positions status
-                    print("\n📊 [SAVED POSITIONS] Current saved positions status:")
-                    if enable_plc:
-                        try:
-                            plc_integration = pipeline.get_plc_integration()
-                            if plc_integration:
-                                status = plc_integration.get_saved_positions_status()
-                                
-                                print(f"   📋 Total saved: {status['total_saved']}/6 positions")
-                                print(f"   🗂️ Bag mappings: {status['bag_mappings']}")
-                                print("   📍 Positions:")
-                                
-                                for position_key, pos_info in status['positions'].items():
-                                    status_icon = "✅" if pos_info['saved'] else "❌"
-                                    print(f"     {status_icon} {position_key}: {pos_info['coordinates']}")
-                                    if pos_info['saved']:
-                                        print(f"        📅 Saved: {pos_info['saved_at']}")
-                                        print(f"        📤 Last sent: {pos_info['last_sent_at']}")
-                            else:
-                                print("   ❌ PLC integration not available")
-                        except Exception as e:
-                            print(f"   ❌ Error getting positions status: {e}")
-                    else:
-                        print("   ⚠️ PLC disabled, saved positions not available")
                 
                 # ⭐ ORIENTATION LOCK CONTROLS ⭐
                 elif key == ord('o'):

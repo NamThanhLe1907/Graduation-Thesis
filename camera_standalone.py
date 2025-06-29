@@ -21,8 +21,8 @@ ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # Cấu hình hiển thị 
 SHOW_DEPTH = os.environ.get('SHOW_DEPTH', 'false').lower() in ('true', '1', 'yes')
-SHOW_THETA4 = os.environ.get('SHOW_THETA4', 'true').lower() in ('true', '1', 'yes')
-SHOW_REGIONS = os.environ.get('SHOW_REGIONS', 'true').lower() in ('true', '1', 'yes')
+SHOW_THETA4 = os.environ.get('SHOW_THETA4', 'false').lower() in ('true', '1', 'yes')
+SHOW_REGIONS = os.environ.get('SHOW_REGIONS', 'false').lower() in ('true', '1', 'yes')
 
 # ⭐ LOGGING CONTROL VARIABLES ⭐
 LOGGING_PAUSED = False
@@ -698,6 +698,8 @@ def demo_camera():
         print("   'h': Help (hướng dẫn chi tiết)  |  's': Sequence status")
         print("   'l': 🔇 Smart logging toggle (main + libraries)") 
         print("   'n': 🚀 Clean PLC send (auto-disable debug spam)")
+        print("   'w': 🔄 Toggle load class trigger  |  'e': 📊 Show trigger status")
+        print("   ⭐ SAVED POSITIONS: 'm': Save current  |  '4': Send P1R1  |  '5': Send P1R3  |  '6': Send P1R2")
         print()
         
         try:
@@ -888,8 +890,13 @@ def demo_camera():
                         # Lấy regions data từ detections
                         regions_data = detections.get('pallet_regions', [])
                         
-                        # Tạo PLC visualization với completed regions
-                        plc_viz = pipeline.create_plc_visualization(frame, regions_data)
+                        # ⭐ NEW: Use bag tracking visualization ⭐
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration and len(regions_data) > 0:
+                            plc_viz = plc_integration.create_bag_tracking_visualization(frame, regions_data)
+                        else:
+                            # Fallback: Create basic PLC visualization
+                            plc_viz = pipeline.create_plc_visualization(frame, regions_data)
                         
                         if plc_viz is not None:
                             # Lưu lại để tái sử dụng
@@ -898,7 +905,7 @@ def demo_camera():
                     
                     # Hiển thị PLC từ lần xử lý gần nhất
                     if last_plc_viz is not None:
-                        cv2.imshow("PLC Integration & Completed Regions", last_plc_viz)
+                        cv2.imshow("PLC Integration & Bag Tracking", last_plc_viz)
                 
                 # Xử lý phím nhấn
                 key = cv2.waitKey(1) & 0xFF
@@ -925,7 +932,7 @@ def demo_camera():
                         SHOW_PLC = not SHOW_PLC
                         print(f"🏭 PLC Integration tab: {'BẬT' if SHOW_PLC else 'TẮT'}")
                         if not SHOW_PLC:
-                            cv2.destroyWindow("PLC Integration & Completed Regions")
+                            cv2.destroyWindow("PLC Integration & Bag Tracking")
                     else:
                         print("🏭 PLC Integration disabled! Set ENABLE_PLC=true to enable.")
                 elif key == ord('h'):
@@ -936,8 +943,8 @@ def demo_camera():
                     print("'d': Bật/tắt TAB DEPTH (📏 'Rotated Depth Regions')")
                     print("'t': Bật/tắt TAB THETA4 (🧠 'Theta4 Calculation & Regions')")
                     print("'r': Bật/tắt TAB REGIONS (🗺️ 'Region Processing & Detections')")
-                    print("'p': Bật/tắt TAB PLC (🏭 'PLC Integration & Completed Regions')")
-                    print("'l': 📝 Toggle logging (PAUSE/RESUME) - Giúp debug dễ hơn")
+                    print("'p': Bật/tắt TAB PLC (🏭 'PLC Integration & Bag Tracking')")
+                    print("'l': 🔇 Toggle logging (PAUSE/RESUME) - Giúp debug dễ hơn")
                     print("'h': Hiển thị help này")
                     print()
                     print("=== SEQUENTIAL CONTROLS ===")
@@ -951,6 +958,20 @@ def demo_camera():
                     print("'z': Show depth info")
                     print("'1'/'2'/'3': Set bag number (bao 1/2/3) - Changes target region")
                     print("'b': Show current bag info")
+                    print("'w': Toggle load class trigger (load2→pallets1, load→pallets2)")
+                    print("'e': Show load class trigger status")
+                    print()
+                    print("=== ORIENTATION LOCK CONTROLS ===")
+                    print("'o': 🔒 Lock current orientation (save to file)")
+                    print("'u': 🔓 Unlock orientation (back to auto-detection)")
+                    print("'i': 📊 Show orientation lock info & status")
+                    print()
+                    print("=== SAVED POSITIONS CONTROLS ===")
+                    print("'m': 💾 Save current positions (confirm drop points)")
+                    print("'4': 📤 Send P1R1 position to PLC")
+                    print("'5': 📤 Send P1R3 position to PLC")
+                    print("'6': 📤 Send P1R2 position to PLC")
+                    print("'v': 📊 Show saved positions status")
                     print()
                     print("=== PLC INTEGRATION ===")
                     print(f"PLC Status: {'🟢 ENABLED' if enable_plc else '🔴 DISABLED'}")
@@ -1079,6 +1100,31 @@ def demo_camera():
                         frame, detections = detection_result
                         print("   🔄 Processing current frame for PLC sending...")
                         
+                        # ⭐ ENHANCED: GET DEPTH RESULTS FOR ACCURATE COORDINATES ⭐
+                        depth_result = pipeline.get_latest_depth(timeout=0.1)
+                        if depth_result:
+                            frame_depth, depth_results = depth_result
+                            detections['depth_results'] = depth_results  # ⭐ Add depth results to detections ⭐
+                            print(f"   ✅ Added {len(depth_results)} depth results to detections")
+                            
+                            # Debug depth results format
+                            if depth_results:
+                                sample_depth = depth_results[0]
+                                print(f"   📊 Sample depth result keys: {list(sample_depth.keys())}")
+                                if 'region_info' in sample_depth:
+                                    region_info = sample_depth['region_info']
+                                    pallet_id = region_info.get('pallet_id', '?')
+                                    region_id = region_info.get('region_id', '?')
+                                    print(f"   📊 Sample: P{pallet_id}R{region_id}")
+                                if 'position' in sample_depth:
+                                    pos = sample_depth['position']
+                                    print(f"   📊 Sample position: x={pos.get('x', 0):.1f}, y={pos.get('y', 0):.1f}, z={pos.get('z', 0):.3f}")
+                                if 'position_3d_camera' in sample_depth:
+                                    pos_3d = sample_depth['position_3d_camera']
+                                    print(f"   📊 Sample 3D camera: X={pos_3d.get('X', 0):.3f}, Y={pos_3d.get('Y', 0):.3f}, Z={pos_3d.get('Z', 0):.3f}")
+                        else:
+                            print("   ⚠️ No depth results available, using detections only")
+                        
                         regions_data, success = plc_integration.process_detection_and_send_to_plc(detections, layer=1)
                         
                         if success:
@@ -1139,7 +1185,7 @@ def demo_camera():
                 
                 # ⭐ BAG CONTROL HANDLERS ⭐
                 elif key == ord('1'):
-                    # Set bag 1
+                    # Set bag number 1
                     print("\n🎯 [BAG CONTROL] Setting bag number 1...")
                     if enable_plc:
                         plc_integration = pipeline.get_plc_integration()
@@ -1151,7 +1197,7 @@ def demo_camera():
                         print("   ⚠️ PLC disabled, bag control not available")
                         
                 elif key == ord('2'):
-                    # Set bag 2
+                    # Set bag number 2
                     print("\n🎯 [BAG CONTROL] Setting bag number 2...")
                     if enable_plc:
                         plc_integration = pipeline.get_plc_integration()
@@ -1163,7 +1209,7 @@ def demo_camera():
                         print("   ⚠️ PLC disabled, bag control not available")
                         
                 elif key == ord('3'):
-                    # Set bag 3
+                    # Set bag number 3
                     print("\n🎯 [BAG CONTROL] Setting bag number 3...")
                     if enable_plc:
                         plc_integration = pipeline.get_plc_integration()
@@ -1188,6 +1234,260 @@ def demo_camera():
                                 print(f"     {marker} bao {bag_num} → R{region_id}")
                     else:
                         print("   ⚠️ PLC disabled, bag info not available")
+                        
+                elif key == ord('w'):
+                    # Toggle load class trigger
+                    print("\n🔄 [LOAD CLASS TRIGGER] Toggling load class assignment...")
+                    try:
+                        # Get region manager from pipeline
+                        latest_detection = pipeline.get_latest_detection()
+                        if latest_detection:
+                            # Access RegionManager through pipeline's processing components
+                            # We'll try to get it through the pipeline's internal structure
+                            if hasattr(pipeline, '_region_manager'):
+                                region_manager = pipeline._region_manager
+                            else:
+                                # Alternative: get through plc integration
+                                plc_integration = pipeline.get_plc_integration()
+                                if plc_integration and hasattr(plc_integration, 'region_manager'):
+                                    region_manager = plc_integration.region_manager
+                                else:
+                                    print("   ❌ Cannot access RegionManager")
+                                    continue
+                            
+                            # Toggle the trigger
+                            current_status = region_manager.enable_load_class_trigger
+                            region_manager.set_load_class_trigger(not current_status)
+                        else:
+                            print("   ⚠️ No pipeline data available")
+                    except Exception as e:
+                        print(f"   ❌ Error: {e}")
+                        
+                elif key == ord('e'):
+                    # Show load class trigger status
+                    print("\n📊 [LOAD CLASS TRIGGER] Current status:")
+                    try:
+                        # Get region manager from pipeline
+                        latest_detection = pipeline.get_latest_detection()
+                        if latest_detection:
+                            # Access RegionManager through pipeline
+                            if hasattr(pipeline, '_region_manager'):
+                                region_manager = pipeline._region_manager
+                            else:
+                                # Alternative: get through plc integration
+                                plc_integration = pipeline.get_plc_integration()
+                                if plc_integration and hasattr(plc_integration, 'region_manager'):
+                                    region_manager = plc_integration.region_manager
+                                else:
+                                    print("   ❌ Cannot access RegionManager")
+                                    continue
+                            
+                            # Show status
+                            status = region_manager.get_load_class_trigger_status()
+                            print(f"   Status: {'🟢 ENABLED' if status['enabled'] else '🔴 DISABLED'}")
+                            if status['enabled']:
+                                print("   Mapping:")
+                                for class_info, target_region in status['mapping'].items():
+                                    print(f"     🎯 {class_info} → {target_region}")
+                            else:
+                                print("   🔄 Using normal region logic")
+                        else:
+                            print("   ⚠️ No pipeline data available")
+                    except Exception as e:
+                        print(f"   ❌ Error: {e}")
+                
+                # ⭐ SAVED POSITIONS CONTROLS ⭐
+                elif key == ord('m'):
+                    # Save current positions
+                    print("\n💾 [SAVED POSITIONS] Saving current detected positions...")
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                success = plc_integration.save_current_positions()
+                                if success:
+                                    print("   ✅ Positions saved successfully!")
+                                    # Show saved positions status
+                                    status = plc_integration.get_saved_positions_status()
+                                    print(f"   📊 Total saved: {status['total_saved']}/6 positions")
+                                else:
+                                    print("   ❌ Failed to save positions")
+                            else:
+                                print("   ❌ PLC integration not available")
+                        except Exception as e:
+                            print(f"   ❌ Error saving positions: {e}")
+                    else:
+                        print("   ⚠️ PLC disabled, saved positions not available")
+                
+                elif key == ord('4'):
+                    # Send P1R1 position to PLC
+                    print("\n📤 [SAVED POSITIONS] Sending P1R1 position to PLC...")
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                success = plc_integration.send_saved_position_to_plc('P1R1')
+                                if success:
+                                    print("   ✅ P1R1 position sent successfully!")
+                                else:
+                                    print("   ❌ Failed to send P1R1 position")
+                            else:
+                                print("   ❌ PLC integration not available")
+                        except Exception as e:
+                            print(f"   ❌ Error sending P1R1: {e}")
+                    else:
+                        print("   ⚠️ PLC disabled, cannot send saved positions")
+                
+                elif key == ord('5'):
+                    # Send P1R3 position to PLC
+                    print("\n📤 [SAVED POSITIONS] Sending P1R3 position to PLC...")
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                success = plc_integration.send_saved_position_to_plc('P1R3')
+                                if success:
+                                    print("   ✅ P1R3 position sent successfully!")
+                                else:
+                                    print("   ❌ Failed to send P1R3 position")
+                            else:
+                                print("   ❌ PLC integration not available")
+                        except Exception as e:
+                            print(f"   ❌ Error sending P1R3: {e}")
+                    else:
+                        print("   ⚠️ PLC disabled, cannot send saved positions")
+                
+                elif key == ord('6'):
+                    # Send P1R2 position to PLC
+                    print("\n📤 [SAVED POSITIONS] Sending P1R2 position to PLC...")
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                success = plc_integration.send_saved_position_to_plc('P1R2')
+                                if success:
+                                    print("   ✅ P1R2 position sent successfully!")
+                                else:
+                                    print("   ❌ Failed to send P1R2 position")
+                            else:
+                                print("   ❌ PLC integration not available")
+                        except Exception as e:
+                            print(f"   ❌ Error sending P1R2: {e}")
+                    else:
+                        print("   ⚠️ PLC disabled, cannot send saved positions")
+                
+                elif key == ord('v'):
+                    # Show saved positions status
+                    print("\n📊 [SAVED POSITIONS] Current saved positions status:")
+                    if enable_plc:
+                        try:
+                            plc_integration = pipeline.get_plc_integration()
+                            if plc_integration:
+                                status = plc_integration.get_saved_positions_status()
+                                
+                                print(f"   📋 Total saved: {status['total_saved']}/6 positions")
+                                print(f"   🗂️ Bag mappings: {status['bag_mappings']}")
+                                print("   📍 Positions:")
+                                
+                                for position_key, pos_info in status['positions'].items():
+                                    status_icon = "✅" if pos_info['saved'] else "❌"
+                                    print(f"     {status_icon} {position_key}: {pos_info['coordinates']}")
+                                    if pos_info['saved']:
+                                        print(f"        📅 Saved: {pos_info['saved_at']}")
+                                        print(f"        📤 Last sent: {pos_info['last_sent_at']}")
+                            else:
+                                print("   ❌ PLC integration not available")
+                        except Exception as e:
+                            print(f"   ❌ Error getting positions status: {e}")
+                    else:
+                        print("   ⚠️ PLC disabled, saved positions not available")
+                
+                # ⭐ ORIENTATION LOCK CONTROLS ⭐
+                elif key == ord('o'):
+                    # Lock current orientation
+                    print("\n🔒 [ORIENTATION LOCK] Locking current orientation...")
+                    try:
+                        # Get current frame with corners
+                        detection_result = pipeline.get_latest_detection(timeout=0.1)
+                        if detection_result:
+                            frame, detections = detection_result
+                            corners_list = detections.get('corners', [])
+                            
+                            if corners_list:
+                                # Get layer (default 1 for now)
+                                current_layer = 1  # Could be made configurable
+                                
+                                # Access module divider through pipeline
+                                plc_integration = pipeline.get_plc_integration()
+                                if plc_integration and hasattr(plc_integration, 'module_divider'):
+                                    module_divider = plc_integration.module_divider
+                                    
+                                    # Lock orientation
+                                    success = module_divider.lock_current_orientation(corners_list, current_layer)
+                                    if success:
+                                        print(f"   ✅ Orientation locked for layer {current_layer}")
+                                        print(f"   📁 Saved to orientation_lock.json")
+                                        
+                                        # Show locked info
+                                        lock_status = module_divider.get_orientation_lock_status()
+                                        print(f"   📋 Status: {lock_status['status']}")
+                                    else:
+                                        print("   ❌ Failed to lock orientation")
+                                else:
+                                    print("   ❌ Cannot access module divider")
+                            else:
+                                print("   ⚠️ No pallet corners found to lock")
+                        else:
+                            print("   ⚠️ No current frame data available")
+                    except Exception as e:
+                        print(f"   ❌ Error locking orientation: {e}")
+                
+                elif key == ord('u'):
+                    # Unlock orientation
+                    print("\n🔓 [ORIENTATION UNLOCK] Unlocking orientation...")
+                    try:
+                        # Access module divider through pipeline
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration and hasattr(plc_integration, 'module_divider'):
+                            module_divider = plc_integration.module_divider
+                            
+                            # Unlock orientation
+                            module_divider.unlock_orientation(delete_file=False)
+                            print("   ✅ Orientation unlocked - back to auto-detection")
+                            print("   🔄 File kept for future use")
+                        else:
+                            print("   ❌ Cannot access module divider")
+                    except Exception as e:
+                        print(f"   ❌ Error unlocking orientation: {e}")
+                
+                elif key == ord('i'):
+                    # Show orientation info
+                    print("\n📊 [ORIENTATION INFO] Current orientation status:")
+                    try:
+                        # Access module divider through pipeline
+                        plc_integration = pipeline.get_plc_integration()
+                        if plc_integration and hasattr(plc_integration, 'module_divider'):
+                            module_divider = plc_integration.module_divider
+                            
+                            # Get status
+                            lock_status = module_divider.get_orientation_lock_status()
+                            
+                            if lock_status['locked']:
+                                print(f"   🔒 Status: LOCKED")
+                                lock_data = lock_status['data']
+                                print(f"   📅 Locked at: {lock_data['locked_at']}")
+                                print(f"   📏 Layer: {lock_data['layer']}")
+                                print(f"   📦 Pallets: {len(lock_data['pallets'])}")
+                                
+                                for pallet in lock_data['pallets']:
+                                    print(f"     P{pallet['pallet_id']}: {pallet['orientation']:.1f}° → {pallet['division_strategy']}")
+                            else:
+                                print(f"   🔓 Status: UNLOCKED (Auto-detection)")
+                                print(f"   🔄 Mode: Auto-detection enabled")
+                        else:
+                            print("   ❌ Cannot access module divider")
+                    except Exception as e:
+                        print(f"   ❌ Error getting orientation info: {e}")
                 
         except KeyboardInterrupt:
             pass
@@ -1220,6 +1520,30 @@ DEBUG STEPS:
    ✅ CORRECT: [loads] P1R2: Px=279.03, Py=122.47 (DB26.0, DB26.4)
    ❌ WRONG: loads: Px=-13.99, Py=219.75 (overwritten values)
 4. After fix: Only CORRECT values should appear
+"""
+
+# ⭐ LOAD CLASS ASSIGNMENT TRIGGER DOCUMENTATION ⭐
+"""
+🎯 NEW FEATURE: Load Class Assignment Trigger
+
+FUNCTIONALITY:
+- Biến trigger để control việc assign load classes vào regions
+- load2 (class 1.0) → pallets1 (thay vì logic bình thường)
+- load (class 0.0) → pallets2 (thay vì logic bình thường)
+
+KEYBOARD CONTROLS:
+- 'w': Toggle load class trigger (bật/tắt)
+- 'e': Show trigger status và mapping
+
+LOGIC:
+- Khi trigger BẬT: Forced assignment theo mapping trên
+- Khi trigger TẮT: Sử dụng logic region assignment bình thường
+- Chỉ áp dụng cho detections trong vùng loads hoặc target region
+
+IMPLEMENTATION:
+- RegionManager._get_forced_region_for_load_class()
+- RegionManager.enable_load_class_trigger flag
+- Override trong get_region_for_detection()
 """
 
 if __name__ == "__main__":

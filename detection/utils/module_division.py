@@ -5,6 +5,9 @@ Module chia pallet thành các vùng nhỏ hơn để depth estimation.
 import numpy as np
 from typing import List, Tuple, Dict, Any, Optional
 import math
+import os
+import json
+from datetime import datetime
 
 
 class ModuleDivision:
@@ -15,11 +18,15 @@ class ModuleDivision:
     def __init__(self, debug: bool = False):
         """Khởi tạo Module Division."""
         self.debug = debug
+        
+        # ⭐ ORIENTATION LOCK SYSTEM ⭐
+        self.orientation_locked = False
+        self.locked_orientation_data = None
+        self.orientation_lock_file = "orientation_lock.json"
+        
+        # Auto-load saved orientation lock if exists
+        self.load_orientation_lock()
     
-
-    
-
-
     def divide_module_1(self, pallet_bbox: List[float], layer: int = 1) -> List[Dict[str, Any]]:
         """
         Chia pallet theo Module 1:
@@ -99,48 +106,59 @@ class ModuleDivision:
     
     def divide_obb_module_1(self, pallet_corners: List[List[float]], layer: int = 1) -> List[Dict[str, Any]]:
         """
-        Chia pallet OBB theo Module 1 với xác định hướng thực tế:
-        - Layer 1: Luôn chia theo CHIỀU DÀI thực tế của pallet (cạnh 12cm)
-        - Layer 2: Luôn chia theo CHIỀU NGANG thực tế của pallet (cạnh 10cm)
+        Chia pallet OBB theo Module 1 với orientation lock support:
+        - Layer 1: Chia 3 phần theo chiều dài thực tế (cạnh 12cm)  
+        - Layer 2: Chia 3 phần theo chiều rộng thực tế (cạnh 10cm)
         
         Args:
-            pallet_corners: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] corners của pallet OBB
+            pallet_corners: Danh sách 4 góc của pallet OBB
             layer: Lớp cần chia (1 hoặc 2)
             
         Returns:
-            List[Dict]: Danh sách các vùng con với corners chính xác và orientation
+            List[Dict]: Danh sách các vùng con với corners và thông tin chi tiết
         """
+        if self.debug:
+            print(f"  [divide_obb] layer={layer}, corners count={len(pallet_corners)}")
+        
         if layer not in [1, 2]:
             raise ValueError("Layer phải là 1 hoặc 2")
         
-        # Chuẩn hóa corners thành format numpy
+        # Convert to numpy array để tính toán
         corners_array = np.array(pallet_corners)
         
-        # Tính orientation của pallet gốc
-        pallet_orientation = self._calculate_pallet_orientation(pallet_corners)
-        
-        # Tính 2 cạnh kề nhau để xác định cạnh dài/ngắn
-        edge1 = corners_array[1] - corners_array[0]  # Cạnh từ corner 0 -> 1
-        edge2 = corners_array[2] - corners_array[1]  # Cạnh từ corner 1 -> 2
-        
-        edge1_length = np.linalg.norm(edge1)
-        edge2_length = np.linalg.norm(edge2)
-        
-        # Xác định cạnh nào dài hơn (12cm vs 10cm)
-        if edge1_length > edge2_length:
-            # Edge1 là cạnh dài (12cm), Edge2 là cạnh ngắn (10cm)
-            long_edge_is_edge1 = True
+        # ⭐ ORIENTATION LOCK CHECK ⭐
+        if self.orientation_locked and self.locked_orientation_data:
+            # Sử dụng locked orientation thay vì detect
+            locked_layer = self.locked_orientation_data.get('layer')
+            if locked_layer == layer:
+                # Find matching pallet trong locked data (giả sử pallet đầu tiên)
+                locked_pallets = self.locked_orientation_data.get('pallets', [])
+                if locked_pallets:
+                    locked_pallet = locked_pallets[0]  # Use first pallet as reference
+                    long_edge_is_edge1 = locked_pallet['long_edge_is_edge1']
+                    pallet_orientation = locked_pallet['orientation']
+                    
+                    if self.debug:
+                        print(f"    🔒 Using LOCKED orientation: {pallet_orientation:.1f}°, strategy: {locked_pallet['division_strategy']}")
+                else:
+                    # Fallback to detection
+                    long_edge_is_edge1, pallet_orientation = self._detect_pallet_orientation(corners_array)
+                    if self.debug:
+                        print(f"    🔄 Locked data empty, fallback to detection")
+            else:
+                # Layer mismatch, fallback to detection
+                long_edge_is_edge1, pallet_orientation = self._detect_pallet_orientation(corners_array)
+                if self.debug:
+                    print(f"    🔄 Layer mismatch (locked:{locked_layer} vs current:{layer}), fallback to detection")
         else:
-            # Edge2 là cạnh dài (12cm), Edge1 là cạnh ngắn (10cm)
-            long_edge_is_edge1 = False
+            # Normal detection
+            long_edge_is_edge1, pallet_orientation = self._detect_pallet_orientation(corners_array)
+            if self.debug:
+                print(f"    🔍 Auto-detection mode")
         
+        # ⭐ TIẾP TỤC XỬ LÝ VỚI ORIENTATION ĐÃ XÁC ĐỊNH ⭐
         if self.debug:
-            print(f"[ModuleDivision] Phân tích pallet:")
-            print(f"  Pallet orientation: {pallet_orientation:.1f}°")
-            print(f"  Edge1 length: {edge1_length:.1f}px")
-            print(f"  Edge2 length: {edge2_length:.1f}px")
-            print(f"  Cạnh dài (12cm): {'Edge1' if long_edge_is_edge1 else 'Edge2'}")
-            print(f"  Cạnh ngắn (10cm): {'Edge2' if long_edge_is_edge1 else 'Edge1'}")
+            print(f"    orientation={pallet_orientation:.1f}°, edge_ratio={long_edge_is_edge1}")
         
         # Tìm corners theo thứ tự: top-left, top-right, bottom-right, bottom-left
         sorted_by_y = corners_array[np.argsort(corners_array[:, 1])]
@@ -158,7 +176,7 @@ class ModuleDivision:
             if long_edge_is_edge1:
                 # Cạnh dài là Edge1 (horizontal direction) -> chia theo X
                 if self.debug:
-                    print(f"[ModuleDivision] Layer 1: Chia theo cạnh dài (Edge1 - horizontal) -> chia theo X")
+                    print(f"    Layer 1: Chia theo cạnh dài (Edge1 - horizontal) → chia theo X")
                     
                 for i in range(3):
                     ratio_start = i / 3.0
@@ -188,7 +206,7 @@ class ModuleDivision:
             else:
                 # Cạnh dài là Edge2 (vertical direction) -> chia theo Y
                 if self.debug:
-                    print(f"[ModuleDivision] Layer 1: Chia theo cạnh dài (Edge2 - vertical) -> chia theo Y")
+                    print(f"    Layer 1: Chia theo cạnh dài (Edge2 - vertical) → chia theo Y")
                     
                 for i in range(3):
                     ratio_start = i / 3.0
@@ -221,7 +239,7 @@ class ModuleDivision:
             if not long_edge_is_edge1:
                 # Cạnh ngắn là Edge1 (horizontal direction) -> chia theo X
                 if self.debug:
-                    print(f"[ModuleDivision] Layer 2: Chia theo cạnh ngắn (Edge1 - horizontal) -> chia theo X")
+                    print(f"    Layer 2: Chia theo cạnh ngắn (Edge1 - horizontal) → chia theo X")
                     
                 for i in range(3):
                     ratio_start = i / 3.0
@@ -251,7 +269,7 @@ class ModuleDivision:
             else:
                 # Cạnh ngắn là Edge2 (vertical direction) -> chia theo Y
                 if self.debug:
-                    print(f"[ModuleDivision] Layer 2: Chia theo cạnh ngắn (Edge2 - vertical) -> chia theo Y")
+                    print(f"    Layer 2: Chia theo cạnh ngắn (Edge2 - vertical) → chia theo Y")
                     
                 for i in range(3):
                     ratio_start = i / 3.0
@@ -279,7 +297,41 @@ class ModuleDivision:
                         'pallet_orientation': pallet_orientation
                     })
         
+        if self.debug:
+            print(f"    Created {len(regions)} regions: " + ", ".join([f"R{r['region_id']}" for r in regions]))
+        
         return regions
+    
+    def _detect_pallet_orientation(self, corners_array: np.ndarray) -> Tuple[bool, float]:
+        """
+        Detect pallet orientation và edge ratios
+        
+        Args:
+            corners_array: Numpy array của corners
+            
+        Returns:
+            Tuple[bool, float]: (long_edge_is_edge1, pallet_orientation)
+        """
+        # Tính edge lengths và orientation
+        edge1 = corners_array[1] - corners_array[0]  # Cạnh từ corner 0 -> 1
+        edge2 = corners_array[3] - corners_array[0]  # Cạnh từ corner 0 -> 3
+        
+        edge1_length = np.linalg.norm(edge1)
+        edge2_length = np.linalg.norm(edge2)
+        
+        # Tính orientation (góc của cạnh đầu tiên so với trục X)
+        pallet_orientation = math.degrees(math.atan2(edge1[1], edge1[0]))
+        
+        # Chuẩn hóa góc về range [-180, 180]
+        while pallet_orientation > 180:
+            pallet_orientation -= 360
+        while pallet_orientation <= -180:
+            pallet_orientation += 360
+        
+        # Xác định cạnh nào dài hơn (giả định: cạnh dài = 12cm, cạnh ngắn = 10cm)
+        long_edge_is_edge1 = edge1_length > edge2_length
+        
+        return long_edge_is_edge1, pallet_orientation
     
     def _calculate_pallet_orientation(self, pallet_corners: List[List[float]]) -> float:
         """
@@ -415,6 +467,10 @@ class ModuleDivision:
         if target_classes is None:
             target_classes = [0.0, 1.0, 2.0]  # Tạm thời chấp nhận tất cả class để debug
         
+        # ⭐ ENHANCED DEBUG: Show input and processing ⭐
+        if self.debug:
+            print(f"\n[ModuleDivision DEBUG] process_pallet_detections: layer={layer}, target_classes={target_classes}")
+        
         result = {
             'original_detection': detection_result,
             'divided_regions': [],
@@ -435,58 +491,63 @@ class ModuleDivision:
             corners_list = detection_result.get('corners', [])
             bounding_boxes = detection_result.get('bounding_boxes', [])
             if self.debug:
-                print(f"[ModuleDivision DEBUG] Input:")
-                print(f"  - Classes: {classes}")
-                print(f"  - Target classes: {target_classes}")
-                print(f"  - Corners count: {len(corners_list)}")
-                print(f"  - Bboxes count: {len(bounding_boxes)}")            
-            #Filter chỉ lấy detection thuộc target_classes
+                print(f"  Input: classes={len(classes)}, corners={len(corners_list)}, bboxes={len(bounding_boxes)}")            
+            #Filter chỉ lấy detection thuộc target_classes
             filtered_corners = []
             filtered_bboxes = []
 
+            if self.debug:
+                print(f"  Filtering for target classes: {target_classes}")
             if classes:
                 for i, cls in enumerate(classes):
-                    if self.debug:
-                        print(f"  - Detection {i}: class={cls}, checking if {cls} in {target_classes}")
                     if cls in target_classes:
-                        if self.debug:
-                            print(f"    -> ACCEPTED")
                         if corners_list and i < len(corners_list):
                             filtered_corners.append(corners_list[i])
                         if bounding_boxes and i < len(bounding_boxes):
                             filtered_bboxes.append(bounding_boxes[i])
-                    else:
                         if self.debug:
-                            print(f"    -> REJECTED")
+                            print(f"    Accepted class {cls} at index {i}")
             else:
-                #Fallback: Nếu không có thông tin class, lấy tất cả
-                print(f"[ModuleDivision] Không có thông tin class, lấy tất cả")
+                #Fallback: Nếu không có thông tin class, lấy tất cả
                 filtered_corners = corners_list
                 filtered_bboxes = bounding_boxes
-            if self.debug:
-                print(f"[ModuleDivision DEBUG] After filtering:")
-                print(f"  - Filtered corners: {len(filtered_corners)}")
-                print(f"  - Filtered bboxes: {len(filtered_bboxes)}")
+                if self.debug:
+                    print(f"  No class info, using all detections")
+            
             result['processing_info']['filtered_detection'] = len(filtered_corners) + len(filtered_bboxes)
             
             # Kiểm tra xem có corners không
             if filtered_corners and len(filtered_corners) > 0:
-                # print(f"[ModuleDivision] Sử dụng {len(filtered_corners)} rotated bounding boxes (corners)")
+                if self.debug:
+                    print(f"  Using {len(filtered_corners)} rotated bounding boxes (corners)")
                 all_regions = self._process_with_obb_corners(filtered_corners, layer)
             elif filtered_bboxes and len(filtered_bboxes) > 0:
-                # print(f"[ModuleDivision] Fallback: Sử dụng {len(filtered_bboxes)} regular bounding boxes")
+                if self.debug:
+                    print(f"  Fallback: Using {len(filtered_bboxes)} regular bounding boxes")
                 all_regions = self._process_with_bboxes(filtered_bboxes, layer)
             else:
-                print(f"[ModuleDivision] Không tìm thấy corners hoặc bounding_boxes")
+                if self.debug:
+                    print(f"  No corners or bounding_boxes found after filtering")
                 all_regions = []
             
             result['divided_regions'] = all_regions
             result['total_regions'] = len(all_regions)
             result['processing_info']['success'] = True
             
+            if self.debug:
+                print(f"  Final result: success={result['processing_info']['success']}, total_regions={result['total_regions']}")
+                region_summary = []
+                for region in all_regions:
+                    pallet_id = region.get('pallet_id', '?')
+                    region_id = region.get('region_id', '?')
+                    region_summary.append(f"P{pallet_id}R{region_id}")
+                print(f"  Regions: {', '.join(region_summary)}")
+            
         except Exception as e:
             result['processing_info']['error'] = str(e)
-            print(f"Lỗi khi chia pallet: {e}")
+            print(f"[ModuleDivision ERROR] Lỗi khi chia pallet: {e}")
+            import traceback
+            traceback.print_exc()
         
         return result
     
@@ -501,19 +562,37 @@ class ModuleDivision:
         Returns:
             List[Dict]: Danh sách các vùng đã chia với corners chính xác
         """
+        if self.debug:
+            print(f"\n[ModuleDivision DEBUG] _process_with_obb_corners: {len(corners_list)} pallets, layer={layer}")
+        
         all_regions = []
         
         for pallet_idx, corners in enumerate(corners_list):
+            # ⭐ XÁC ĐỊNH PALLET_ID DỰA TRÊN VỊ TRÍ ⭐
+            center_x, center_y = self._calculate_pallet_center(corners)
+            pallet_id = self._determine_pallet_region_id(center_x)
+            
+            if self.debug:
+                print(f"  Processing pallet {pallet_idx + 1}: center=({center_x:.1f}, {center_y:.1f}) → P{pallet_id}")
+            
             # Chia pallet OBB trực tiếp dựa trên corners
             regions = self.divide_obb_module_1(corners, layer=layer)
             
-            # Thêm thông tin pallet_id cho mỗi vùng
-            for region in regions:
-                region['pallet_id'] = pallet_idx + 1
+            if self.debug:
+                print(f"  Created {len(regions)} regions")
+            
+            # ⭐ SỬA LOGIC GÁN PALLET_ID ⭐
+            for region_idx, region in enumerate(regions):
+                region['pallet_id'] = pallet_id  # Sử dụng pallet_id dựa trên vị trí
                 region['global_region_id'] = len(all_regions) + 1
                 region['original_corners'] = corners  # Lưu corners gốc của pallet
+                if self.debug:
+                    print(f"    P{region['pallet_id']}R{region.get('region_id', 'MISSING')}")
             
             all_regions.extend(regions)
+        
+        if self.debug:
+            print(f"[ModuleDivision DEBUG] Final result: {len(all_regions)} total regions")
         
         return all_regions
     
@@ -546,12 +625,19 @@ class ModuleDivision:
         all_regions = []
         
         for pallet_idx, pallet_bbox in enumerate(bounding_boxes):
+            # ⭐ XÁC ĐỊNH PALLET_ID DỰA TRÊN VỊ TRÍ ⭐
+            center_x, center_y = self._calculate_bbox_center(pallet_bbox)
+            pallet_id = self._determine_pallet_region_id(center_x)
+            
+            if self.debug:
+                print(f"  Processing pallet {pallet_idx + 1}: center=({center_x:.1f}, {center_y:.1f}) → P{pallet_id}")
+            
             # Chia pallet thành các vùng nhỏ
             regions = self.divide_module_1(pallet_bbox, layer=layer)
             
-            # Thêm thông tin pallet_id cho mỗi vùng
+            # ⭐ SỬA LOGIC GÁN PALLET_ID ⭐
             for region in regions:
-                region['pallet_id'] = pallet_idx + 1
+                region['pallet_id'] = pallet_id  # Sử dụng pallet_id dựa trên vị trí
                 region['global_region_id'] = len(all_regions) + 1
                 # Không có corners cho regular bbox
             
@@ -577,18 +663,26 @@ class ModuleDivision:
                 }
             ]
         """
+        # print(f"\n[ModuleDivision DEBUG] prepare_for_depth_estimation START:")
+        # print(f"  divided_result keys: {list(divided_result.keys())}")
+        # print(f"  divided_result total_regions: {divided_result.get('total_regions', 0)}")
+        # print(f"  divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
+        
         depth_regions = []
         
         try:
             regions = divided_result.get('divided_regions', [])
+            # print(f"  divided_regions count: {len(regions)}")
             
-            # ⭐ DEBUG: Log input và processing ⭐
-            if self.debug:
-                print(f"[ModuleDivision DEBUG] prepare_for_depth_estimation:")
-                print(f"  Input divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
-                print(f"  Input divided_result regions: {len(regions)}")
-            
-            for region in regions:
+            for i, region in enumerate(regions):
+                # print(f"\n  Processing region {i}:")
+                # print(f"    region keys: {list(region.keys())}")
+                # print(f"    pallet_id: {region.get('pallet_id', 'MISSING')}")
+                # print(f"    region_id: {region.get('region_id', 'MISSING')}")
+                # print(f"    global_region_id: {region.get('global_region_id', 'MISSING')}")
+                # print(f"    center: {region.get('center', 'MISSING')}")
+                # print(f"    bbox: {region.get('bbox', 'MISSING')}")
+                
                 depth_region = {
                     'bbox': region['bbox'],
                     'center': region['center'],
@@ -603,29 +697,34 @@ class ModuleDivision:
                     'pallet_orientation': region.get('pallet_orientation', 0.0)  # Thêm pallet orientation
                 }
                 
+                # print(f"    Created depth_region.region_info: {depth_region['region_info']}")
+                
                 # Thêm corners nếu có (cho rotated boxes)
                 if 'corners' in region:
                     depth_region['corners'] = region['corners']
+                    # print(f"    Added corners: {len(region['corners'])} points")
                 
                 # Thêm corners gốc của pallet nếu có
                 if 'original_corners' in region:
                     depth_region['original_corners'] = region['original_corners']
+                    # print(f"    Added original_corners")
                 
                 depth_regions.append(depth_region)
-                
-                # ⭐ DEBUG: Log từng region được tạo ⭐
-                if self.debug:
-                    region_info = depth_region['region_info']
-                    bbox = depth_region['bbox']
-                    has_corners = 'corners' in depth_region
-                    print(f"    Created region: P{region_info['pallet_id']}R{region_info['region_id']} bbox={[int(x) for x in bbox]} corners={has_corners}")
+                # print(f"    Final depth_region P{depth_region['region_info']['pallet_id']}R{depth_region['region_info']['region_id']}")
         
         except Exception as e:
-            print(f"Lỗi khi chuẩn bị dữ liệu cho depth: {e}")
+            print(f"[ModuleDivision ERROR] Lỗi khi chuẩn bị dữ liệu cho depth: {e}")
+            import traceback
+            traceback.print_exc()
         
-        # ⭐ DEBUG: Log final output ⭐
-        if self.debug:
-            print(f"  Final output depth_regions: {len(depth_regions)}")
+        # print(f"\n[ModuleDivision DEBUG] prepare_for_depth_estimation RESULT:")
+        # print(f"  depth_regions count: {len(depth_regions)}")
+        for i, depth_region in enumerate(depth_regions):
+            region_info = depth_region.get('region_info', {})
+            pallet_id = region_info.get('pallet_id', 'MISSING')
+            region_id = region_info.get('region_id', 'MISSING')
+            center = depth_region.get('center', [0, 0])
+            # print(f"    depth_region {i}: P{pallet_id}R{region_id} center=({center[0]:.1f}, {center[1]:.1f})")
         
         return depth_regions
 
@@ -732,6 +831,197 @@ class ModuleDivision:
                 print(f"  Pallet {pid}: {len(regions)} regions in sequence {sequence}")
         
         return result
+
+    def lock_current_orientation(self, pallet_corners_list: List[List], layer: int, save_to_file: bool = True):
+        """
+        🔒 Lock orientation hiện tại để sử dụng cho tất cả frames tiếp theo
+        
+        Args:
+            pallet_corners_list: List corners của các pallets hiện tại
+            layer: Layer hiện tại (1 hoặc 2)
+            save_to_file: Có lưu vào file không
+        """
+        if not pallet_corners_list:
+            print(f"[ModuleDivision] ❌ Không có pallet corners để lock!")
+            return False
+        
+        # Analyze orientation for each pallet
+        orientation_data = {
+            'layer': layer,
+            'locked_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'pallets': []
+        }
+        
+        for i, corners in enumerate(pallet_corners_list):
+            pallet_orientation = self._calculate_pallet_orientation(corners)
+            
+            # Determine division strategy based on current analysis
+            corners_array = np.array(corners)
+            edge1 = corners_array[1] - corners_array[0]
+            edge2 = corners_array[3] - corners_array[0]
+            edge1_length = np.linalg.norm(edge1)
+            edge2_length = np.linalg.norm(edge2)
+            long_edge_is_edge1 = edge1_length > edge2_length
+            
+            pallet_data = {
+                'pallet_id': i + 1,
+                'orientation': float(pallet_orientation),  # Convert numpy float to Python float
+                'edge1_length': float(edge1_length),
+                'edge2_length': float(edge2_length),
+                'long_edge_is_edge1': bool(long_edge_is_edge1),  # Convert numpy bool to Python bool
+                'division_strategy': self._determine_division_strategy(layer, long_edge_is_edge1)
+            }
+            
+            orientation_data['pallets'].append(pallet_data)
+        
+        # Save orientation lock
+        self.locked_orientation_data = orientation_data
+        self.orientation_locked = True
+        
+        if save_to_file:
+            self.save_orientation_lock()
+        
+        print(f"[ModuleDivision] 🔒 LOCKED orientation for layer {layer}")
+        print(f"  📋 Locked {len(pallet_corners_list)} pallets")
+        for pallet in orientation_data['pallets']:
+            print(f"    P{pallet['pallet_id']}: {pallet['orientation']:.1f}° → {pallet['division_strategy']}")
+        
+        return True
+    
+    def unlock_orientation(self, delete_file: bool = False):
+        """
+        🔓 Unlock orientation để quay về auto-detection
+        
+        Args:
+            delete_file: Có xóa file lock không
+        """
+        self.orientation_locked = False
+        self.locked_orientation_data = None
+        
+        if delete_file and os.path.exists(self.orientation_lock_file):
+            os.remove(self.orientation_lock_file)
+            print(f"[ModuleDivision] 🗑️ Đã xóa file {self.orientation_lock_file}")
+        
+        print(f"[ModuleDivision] 🔓 UNLOCKED orientation - quay về auto-detection")
+    
+    def save_orientation_lock(self):
+        """Lưu orientation lock ra file"""
+        if not self.locked_orientation_data:
+            return False
+        
+        try:
+            with open(self.orientation_lock_file, 'w', encoding='utf-8') as f:
+                json.dump(self.locked_orientation_data, f, indent=2, ensure_ascii=False)
+            print(f"[ModuleDivision] 💾 Đã lưu orientation lock ra {self.orientation_lock_file}")
+            return True
+        except Exception as e:
+            print(f"[ModuleDivision] ❌ Lỗi lưu orientation lock: {e}")
+            return False
+    
+    def load_orientation_lock(self):
+        """Load orientation lock từ file"""
+        try:
+            if os.path.exists(self.orientation_lock_file):
+                with open(self.orientation_lock_file, 'r', encoding='utf-8') as f:
+                    self.locked_orientation_data = json.load(f)
+                self.orientation_locked = True
+                
+                layer = self.locked_orientation_data.get('layer', 1)
+                pallet_count = len(self.locked_orientation_data.get('pallets', []))
+                locked_at = self.locked_orientation_data.get('locked_at', 'unknown')
+                
+                print(f"[ModuleDivision] 📁 Loaded orientation lock từ {self.orientation_lock_file}")
+                print(f"  🔒 Layer {layer}, {pallet_count} pallets, locked at {locked_at}")
+                return True
+        except Exception as e:
+            print(f"[ModuleDivision] ⚠️ Không thể load orientation lock: {e}")
+        
+        return False
+    
+    def get_orientation_lock_status(self):
+        """Lấy status của orientation lock"""
+        if not self.orientation_locked:
+            return {
+                'locked': False,
+                'status': 'Auto-detection enabled'
+            }
+        
+        return {
+            'locked': True,
+            'data': self.locked_orientation_data,
+            'status': f"Locked for layer {self.locked_orientation_data.get('layer', '?')}"
+        }
+    
+    def _determine_division_strategy(self, layer: int, long_edge_is_edge1: bool) -> str:
+        """Xác định strategy chia region"""
+        if layer == 1:
+            if long_edge_is_edge1:
+                return 'layer1_along_long_edge_X'
+            else:
+                return 'layer1_along_long_edge_Y'
+        elif layer == 2:
+            if not long_edge_is_edge1:
+                return 'layer2_along_short_edge_X'
+            else:
+                return 'layer2_along_short_edge_Y'
+        return 'unknown'
+
+    def _determine_pallet_region_id(self, center_x: float) -> int:
+        """
+        Xác định pallet_id dựa trên vị trí X của center point.
+        
+        Args:
+            center_x: Tọa độ X của center point
+            
+        Returns:
+            int: 1 cho pallets1 (trái), 2 cho pallets2 (phải)
+        """
+        # Heuristic dựa trên regions definition:
+        # - pallets1: X từ 356 đến 821
+        # - pallets2: X từ 821 đến 1272
+        # Threshold: X = 821 (boundary giữa pallets1 và pallets2)
+        
+        if center_x < 821:
+            pallet_id = 1  # pallets1 → P1Rx
+            region_name = "pallets1"
+        else:
+            pallet_id = 2  # pallets2 → P2Rx
+            region_name = "pallets2"
+        
+        if self.debug:
+            print(f"    🎯 Center X={center_x:.1f} → {region_name} (P{pallet_id})")
+        
+        return pallet_id
+    
+    def _calculate_pallet_center(self, corners: List[List[float]]) -> Tuple[float, float]:
+        """
+        Tính center point của pallet từ corners.
+        
+        Args:
+            corners: [[x,y], [x,y], [x,y], [x,y]] corners của pallet
+            
+        Returns:
+            Tuple[float, float]: (center_x, center_y)
+        """
+        corners_array = np.array(corners)
+        center_x = np.mean(corners_array[:, 0])
+        center_y = np.mean(corners_array[:, 1])
+        return center_x, center_y
+    
+    def _calculate_bbox_center(self, bbox: List[float]) -> Tuple[float, float]:
+        """
+        Tính center point của pallet từ bounding box.
+        
+        Args:
+            bbox: [x1, y1, x2, y2] bounding box của pallet
+            
+        Returns:
+            Tuple[float, float]: (center_x, center_y)
+        """
+        x1, y1, x2, y2 = bbox
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        return center_x, center_y
 
 
 # Để test module

@@ -21,6 +21,10 @@ class RegionManager:
         Args:
             auto_load_offsets: Có tự động load offset từ file không
         """
+        # ⭐ LOAD CLASS ASSIGNMENT TRIGGER ⭐
+        # Control việc load2→pallet1, load→pallet2
+        self.enable_load_class_trigger = False  # Trigger để bật/tắt tính năng (TẮT để loads tự nhiên vào loads region)
+        
         # Định nghĩa các regions dựa trên tọa độ người dùng cung cấp (cập nhật mới)
         self.regions = {
             'loads': {
@@ -97,6 +101,14 @@ class RegionManager:
         Returns:
             str: Tên region hoặc None nếu không thuộc region nào
         """
+        # ⭐ LOAD CLASS TRIGGER LOGIC ⭐
+        # Khi trigger bật: load2→pallet1, load→pallet2
+        if self.enable_load_class_trigger and detection_class in [0.0, 1.0]:
+            target_region = self._get_forced_region_for_load_class(detection_center, detection_class)
+            if target_region:
+                return target_region
+        
+        # ⭐ ORIGINAL LOGIC (khi trigger tắt hoặc không phải load classes) ⭐
         # Sắp xếp regions theo priority để ưu tiên region có priority cao hơn
         sorted_regions = sorted(self.regions.items(), 
                               key=lambda x: x[1]['priority'])
@@ -109,6 +121,81 @@ class RegionManager:
                     return region_name
         
         return None
+    
+    def _get_forced_region_for_load_class(self, detection_center: Tuple[float, float], 
+                                        detection_class: float) -> Optional[str]:
+        """
+        ⭐ FORCED REGION ASSIGNMENT FOR LOAD CLASSES ⭐
+        Áp dụng logic trigger: load2→pallet1, load→pallet2
+        
+        Args:
+            detection_center: Tâm của detection (x, y)
+            detection_class: Class của detection (0.0 hoặc 1.0)
+            
+        Returns:
+            str: Tên region được force assign hoặc None
+        """
+        # ⭐ LOAD CLASS TRIGGER MAPPING ⭐
+        if detection_class == 1.0:  # load2
+            target_region_name = 'pallets1'
+        elif detection_class == 0.0:  # load
+            target_region_name = 'pallets2'
+        else:
+            return None  # Không phải load classes
+        
+        # Kiểm tra target region có tồn tại không
+        if target_region_name not in self.regions:
+            # print(f"[RegionManager] WARNING: Target region '{target_region_name}' not found for class {detection_class}")
+            return None
+        
+        # Kiểm tra target region có enable không
+        if not self.regions[target_region_name]['enabled']:
+            # print(f"[RegionManager] WARNING: Target region '{target_region_name}' is disabled")
+            return None
+        
+        # ⭐ KIỂM TRA DETECTION CÓ TRONG VÙNG LOADS KHÔNG ⭐
+        # Chỉ apply trigger nếu detection trong vùng loads hoặc target region
+        valid_regions_for_loads = ['loads', target_region_name]
+        
+        for valid_region in valid_regions_for_loads:
+            if valid_region in self.regions and self.is_point_in_region(detection_center, valid_region):
+                # print(f"[RegionManager] TRIGGER: {detection_class} class in {valid_region} → FORCED to {target_region_name}")
+                return target_region_name
+        
+        # Nếu detection không trong vùng hợp lệ, không apply trigger
+        # print(f"[RegionManager] TRIGGER: {detection_class} class not in valid region, using normal logic")
+        return None
+    
+    def set_load_class_trigger(self, enabled: bool):
+        """
+        Bật/tắt load class assignment trigger.
+        
+        Args:
+            enabled: True để bật trigger, False để tắt
+        """
+        self.enable_load_class_trigger = enabled
+        status = "BẬT" if enabled else "TẮT"
+        print(f"[RegionManager] Load class trigger: {status}")
+        if enabled:
+            print("   🎯 load2 (class 1.0) → pallets1")
+            print("   🎯 load (class 0.0) → pallets2")
+        else:
+            print("   🔄 Sử dụng logic region assignment bình thường")
+    
+    def get_load_class_trigger_status(self) -> Dict[str, Any]:
+        """
+        Lấy trạng thái của load class trigger.
+        
+        Returns:
+            Dict: Thông tin trigger status
+        """
+        return {
+            'enabled': self.enable_load_class_trigger,
+            'mapping': {
+                'load2_class_1.0': 'pallets1',
+                'load_class_0.0': 'pallets2'
+            } if self.enable_load_class_trigger else 'normal_region_logic'
+        }
     
     def filter_detections_by_regions(self, detections: Dict[str, Any]) -> Dict[str, Any]:
         """

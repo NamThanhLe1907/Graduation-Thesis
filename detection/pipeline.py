@@ -261,7 +261,7 @@ def _yolo_detection_worker(
             
             yolo_model = yolo_factory()
             print(f"[YOLO Process {mp.current_process().pid}] Model đã khởi tạo thành công: {type(yolo_model).__name__}")
-            divider = ModuleDivision(debug=True)
+            divider = ModuleDivision(debug=False)
             print(f"[YOLO Process] ModuleDivision đã được tạo với debug enabled")
             
             # Khởi tạo Robot Coordinate Transform và Camera Calibration
@@ -348,16 +348,16 @@ def _yolo_detection_worker(
                         
                         # ⭐ DEBUG: Trace sequential logic input (mỗi 10 frames để dễ thấy) ⭐
                         if detection_counter.value % 10 == 0:
-                            print(f"[SEQUENCE DEBUG] Sequential logic input:")
-                            print(f"  pallet_depth_regions count: {len(pallet_depth_regions)}")
+                            # print(f"[SEQUENCE DEBUG] Sequential logic input:")
+                            # print(f"  pallet_depth_regions count: {len(pallet_depth_regions)}")
                             for i, region in enumerate(pallet_depth_regions):
                                 region_info = region.get('region_info', {})
                                 bbox = region.get('bbox', [])
                                 has_corners = 'corners' in region
-                                print(f"    Region {i}: P{region_info.get('pallet_id')}R{region_info.get('region_id')} bbox={[int(x) for x in bbox]} corners={has_corners}")
-                            print(f"  divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
-                            print(f"  divided_result total_regions: {divided_result.get('total_regions', 0)}")
-                            print(f"  divided_result error: {divided_result.get('processing_info', {}).get('error', 'None')}")
+                            #     print(f"    Region {i}: P{region_info.get('pallet_id')}R{region_info.get('region_id')} bbox={[int(x) for x in bbox]} corners={has_corners}")
+                            # print(f"  divided_result success: {divided_result.get('processing_info', {}).get('success', False)}")
+                            # print(f"  divided_result total_regions: {divided_result.get('total_regions', 0)}")
+                            # print(f"  divided_result error: {divided_result.get('processing_info', {}).get('error', 'None')}")
 
                         # ⭐ SEQUENTIAL REGION SENDING WITH Z COORDINATES (PLAN IMPLEMENTATION) ⭐ 
                         # 🚨 DISABLED: Xung đột offset DB26 với region_division_plc_integration.py
@@ -637,10 +637,10 @@ def _yolo_detection_worker(
                         detections_with_theta4['pallet_regions'] = pallet_depth_regions  # ⭐ THÊM PALLET REGIONS INFORMATION
                         
                         # ⭐ DEBUG: Confirm pallet_regions được gửi ra ngoài (mỗi 10 frames để dễ thấy) ⭐
-                        if detection_counter.value % 10 == 0:
-                            print(f"[SEQUENCE DEBUG] Sending to main process:")
-                            print(f"  pallet_regions in output: {len(pallet_depth_regions)} regions")
-                            print(f"  detections_with_theta4 keys: {list(detections_with_theta4.keys())}")
+                        # if detection_counter.value % 10 == 0:
+                            # print(f"[SEQUENCE DEBUG] Sending to main process:")
+                            # print(f"  pallet_regions in output: {len(pallet_depth_regions)} regions")
+                            # print(f"  detections_with_theta4 keys: {list(detections_with_theta4.keys())}")
                         
                         # ⭐ THÊM SEQUENCER STATUS CHO KEYBOARD CONTROLS ⭐
                         if '_region_sequencer' in globals():
@@ -650,12 +650,12 @@ def _yolo_detection_worker(
                             detections_with_theta4['sequencer_available'] = True
                             
                             # ⭐ DEBUG: Confirm sequencer status được thêm (mỗi 10 frames) ⭐
-                            if detection_counter.value % 10 == 0:
-                                print(f"[SEQUENCE DEBUG] Adding sequencer status:")
-                                print(f"  sequencer_available: True")
-                                print(f"  sequencer_status: {sequencer_status['status']}")
-                                print(f"  current_pallet: {sequencer_status.get('current_pallet')}")
-                                print(f"  progress: {sequencer_status['progress']}")
+                            # if detection_counter.value % 10 == 0:
+                            #     print(f"[SEQUENCE DEBUG] Adding sequencer status:")
+                            #     print(f"  sequencer_available: True")
+                            #     print(f"  sequencer_status: {sequencer_status['status']}")
+                            #     print(f"  current_pallet: {sequencer_status.get('current_pallet')}")
+                            #     print(f"  progress: {sequencer_status['progress']}")
                         else:
                             detections_with_theta4['sequencer_status'] = None
                             detections_with_theta4['sequencer_available'] = False
@@ -1010,7 +1010,7 @@ class ProcessingPipeline:
                 print(f"[Pipeline] 🔧 Initializing PLC Integration (IP: {plc_ip})...")
                 self.plc_integration = RegionDivisionPLCIntegration(
                     plc_ip=plc_ip, 
-                    debug=True
+                    debug=False
                 )
                 print(f"[Pipeline] ✅ PLC Integration initialized successfully!")
                 print(f"[Pipeline] 📋 PLC DB26 Layout: loads=0/4, pallets1=12/16, pallets2=24/28")

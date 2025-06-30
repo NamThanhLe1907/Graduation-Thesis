@@ -1,0 +1,43 @@
+{
+    "description": "Cấu hình offset cho các regions - Example configuration",
+    "last_updated": "2024-01-01 00:00:00",
+    "regions": {
+        "loads": {
+            "offset_x": 10.5,
+            "offset_y": -5.2,
+            "note": "Offset cho region loads (Vùng xử lý loads - class 0, 1)"
+        },
+        "pallets1": {
+            "offset_x": 15.0,
+            "offset_y": -8.5,
+            "note": "Offset cho region pallets1 (Vùng xử lý pallets 1 - class 2)"
+        },
+        "pallets2": {
+            "offset_x": 20.3,
+            "offset_y": -12.8,
+            "note": "Offset cho region pallets2 (Vùng xử lý pallets 2 - class 2)"
+        }
+    },
+    "instructions": {
+        "how_to_use": "Chỉnh sửa offset_x và offset_y cho từng region theo nhu cầu",
+        "coordinate_system": "X+ hướng phải, Y+ hướng xuống",
+        "units": "pixels hoặc meters tùy theo hệ thống robot coordinates",
+        "setup_steps": [
+            "1. Copy file này thành 'region_offsets.json'",
+            "2. Chỉnh sửa offset_x, offset_y cho từng region",
+            "3. Hoặc dùng: python configure_region_offsets.py",
+            "4. Test với: python test_region_division_plc.py"
+        ],
+        "plc_db26_layout": {
+            "loads": "DB26.0 (Px), DB26.4 (Py)",
+            "pallets1": "DB26.12 (Px), DB26.16 (Py)", 
+            "pallets2": "DB26.24 (Px), DB26.28 (Py)"
+        },
+        "bag_pallet_tracking": {
+            "description": "Hệ thống tracking riêng biệt từng region",
+            "bag_pallet_1": "Track pallet_id cuối cùng ở region pallets1",
+            "bag_pallet_2": "Track pallet_id cuối cùng ở region pallets2",
+            "example": "Nếu có P1R1 ở pallets1 → bag_pallet_1 = 1, gửi vào DB26.12/16"
+        }
+    }
+} 

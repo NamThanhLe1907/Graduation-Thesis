@@ -1,0 +1,26 @@
+{
+    "description": "Cấu hình offset cho các regions - Auto generated",
+    "last_updated": "2025-06-29 00:53:40",
+    "regions": {
+        "loads": {
+            "offset_x": -45.0,
+            "offset_y": -15.0,
+            "note": "Offset cho region loads (Vùng xử lý loads (class 0, 1))"
+        },
+        "pallets1": {
+            "offset_x": 5.0,
+            "offset_y": -10.0,
+            "note": "Offset cho region pallets1 (Vùng xử lý pallets 1 (class 2))"
+        },
+        "pallets2": {
+            "offset_x": -15.0,
+            "offset_y": -15.0,
+            "note": "Offset cho region pallets2 (Vùng xử lý pallets 2 (class 2))"
+        }
+    },
+    "instructions": {
+        "how_to_use": "Chỉnh sửa offset_x và offset_y cho từng region theo nhu cầu",
+        "coordinate_system": "X+ hướng phải, Y+ hướng xuống",
+        "units": "pixels hoặc meters tùy theo hệ thống robot coordinates"
+    }
+}

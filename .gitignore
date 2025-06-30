@@ -37,11 +37,9 @@ cpp/
 libs/
 .vscode/
 *.exe
+.cursor/*
 
 
-*.pt
-*.json
-*.onnx
 # Compiled object files, static and dynamic libs
 *.o
 *.obj

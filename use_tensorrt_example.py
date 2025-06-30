@@ -838,7 +838,7 @@ def demo_batch_images():
     """Thử nghiệm với tất cả ảnh trong folder images_pallets2"""
     print("Thử nghiệm phát hiện đối tượng với TensorRT trên tất cả ảnh trong folder")
     
-    pallets_folder = "images_pallets"
+    pallets_folder = "test_result"
     if not os.path.exists(pallets_folder):
         print(f"Không tìm thấy folder {pallets_folder}")
         return

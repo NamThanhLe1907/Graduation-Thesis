@@ -145,3 +145,5 @@ env_activate_tensorrt/
 *.onnx
 *.engine
 best.engine
+*.xml
+*.txt
